@@ -1,0 +1,23 @@
+{
+  "1394308230561136680": {
+    "birthdayChannelId": 123456789012345678,
+    "logCategories": [
+      "Presence",
+      "Log",
+      "BirthdayCheck",
+      "Register",
+      "Reaction",
+      "Voice",
+      "JoinLeave",
+      "Other"
+    ],
+    "debugEnabled": true,
+    "nickname": "SIG BOT"
+  },
+  "123456789012345678": {
+    "birthdayChannelId": 987654321098765432,
+    "logCategories": [ "Log" ],
+    "debugEnabled": false,
+    "nickname": "Botty"
+  }
+}
