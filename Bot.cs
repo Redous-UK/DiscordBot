@@ -164,6 +164,7 @@ namespace MyDiscordBot
             SaveSettings();
         }
 
+
         private async Task CheckBirthdays()
         {
             var today = DateTime.Today;
