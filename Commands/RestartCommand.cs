@@ -1,6 +1,5 @@
 ﻿using Discord.WebSocket;
 using System;
-using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace MyDiscordBot.Commands

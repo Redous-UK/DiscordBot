@@ -1,11 +1,10 @@
-﻿using Discord;
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MyDiscordBot.Commands
+namespace MyDiscordBot.Commands.Deprecated
 {
     [Obsolete("This command has been deprecated.")]
     public class LogStatusCommand : ILegacyCommand

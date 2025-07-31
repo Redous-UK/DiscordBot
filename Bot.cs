@@ -8,9 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
-using System.Threading.Channels;
 using System.Threading.Tasks;
-using static System.Collections.Specialized.BitVector32;
 
 namespace MyDiscordBot
 {

@@ -1,9 +1,8 @@
-﻿using Discord;
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System;
 using System.Threading.Tasks;
 
-namespace MyDiscordBot.Commands
+namespace MyDiscordBot.Commands.Deprecated
 {
     [Obsolete("This command has been deprecated.")]
     public class DebugCommand : ILegacyCommand
@@ -19,7 +18,7 @@ namespace MyDiscordBot.Commands
 
             ulong guildId = guildChannel.Guild.Id;
 
-            if (args.Length < 1 || (args[0].ToLower() != "on" && args[0].ToLower() != "off"))
+            if (args.Length < 1 || args[0].ToLower() != "on" && args[0].ToLower() != "off")
             {
                 string status = Bot.GetDebugMode(guildId) ? "ENABLED" : "DISABLED";
                 return message.Channel.SendMessageAsync($"🛠️ Debug mode is currently **{status}**.");

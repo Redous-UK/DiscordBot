@@ -1,5 +1,4 @@
-﻿using Discord;
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,7 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace MyDiscordBot.Commands
+namespace MyDiscordBot.Commands.Deprecated
 {
     [Obsolete("This command has been deprecated.")]
     public class BirthdayChannelCommand : ILegacyCommand
