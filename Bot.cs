@@ -1,6 +1,7 @@
 ﻿using Discord;
 using Discord.WebSocket;
 using DotNetEnv;
+using MyDiscordBot.Services;
 using MyDiscordBot.Commands;
 using System;
 using System.Collections.Generic;
@@ -20,6 +21,9 @@ namespace MyDiscordBot
         private readonly Dictionary<string, ILegacyCommand> _legacyCommands = new();
         private static Dictionary<ulong, GuildSettings> _guildSettings = new();
         private const string SettingsFile = "guild-settings.json";
+
+        private ReminderService _reminderService;
+        public static ReminderService ReminderService => BotInstance._reminderService;
 
         public static Bot BotInstance { get; private set; }
         public string Prefix => _prefix;
@@ -50,6 +54,7 @@ namespace MyDiscordBot
             _client.UserVoiceStateUpdated += HandleVoiceStateAsync;
             _client.PresenceUpdated += HandlePresenceUpdatedAsync;
             _client.ReactionAdded += HandleReactionAddedAsync;
+            _reminderService = new ReminderService(_client);
 
             _client.Ready += async () =>
             {
@@ -295,7 +300,7 @@ namespace MyDiscordBot
             return settings.LogCategories.Contains(category.ToString());
         }
 
-        private void LogMessage(ulong guildId, string message, LogCategory category = LogCategory.Other)
+        public void LogMessage(ulong guildId, string message, LogCategory category = LogCategory.Other)
         {
             if (IsLogCategoryEnabled(guildId, category))
                 Console.WriteLine($"[{category}] {message}");

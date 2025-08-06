@@ -10,6 +10,7 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "fancy";
         public string Description => "Transforms text into fancy styles: fullwidth, gothic, cursive, or custom emoji letters";
+        public string Category => "🎨 Text Effects";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
