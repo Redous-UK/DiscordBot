@@ -2,4 +2,4 @@
 bin/
 obj/
 .vs/
-obj/Debug/net9.0-windows/MyDiscor.8C052997.Up2Date
+packages/
