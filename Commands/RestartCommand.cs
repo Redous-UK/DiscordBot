@@ -9,6 +9,7 @@ namespace MyDiscordBot.Commands
         public string Name => "restart";
 
         public string Description => "This command restarts the bot but can only be run by Admin.";
+        public string Category => "⚙️ Settings & Config";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

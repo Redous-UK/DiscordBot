@@ -8,6 +8,7 @@ namespace MyDiscordBot.Commands
         public string Name => "kick";
 
         public string Description => "Command to Kick User (Not coded yet) !";
+        public string Category => "🛠️ Moderation";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

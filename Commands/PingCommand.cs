@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System.Threading.Tasks;
 
 namespace MyDiscordBot.Commands
@@ -8,6 +8,8 @@ namespace MyDiscordBot.Commands
         public string Name => "ping";
 
         public string Description => "Command to ping the server - response should be Pong if the bot is working";
+
+        public string Category => "🔧 Utility";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

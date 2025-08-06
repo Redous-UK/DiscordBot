@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -9,6 +9,8 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "help";
         public string Description => "Lists all available commands.";
+
+        public string Category => "🔧 Utility";
 
         public Task ExecuteAsync(SocketMessage message, string[] args)
         {

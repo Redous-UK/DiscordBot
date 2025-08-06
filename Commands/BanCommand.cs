@@ -7,6 +7,7 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "ban";
         public string Description => "Command to Ban People (Not Actually Coded Yet)!";
+        public string Category => "🛠️ Moderation";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

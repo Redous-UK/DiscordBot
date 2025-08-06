@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System;
 using System.Threading.Tasks;
 
@@ -9,6 +9,7 @@ namespace MyDiscordBot.Commands
         public string Name => "roll";
 
         public string Description => "Command to randomly roll a dice!";
+        public string Category => "🎮 Fun & Games";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

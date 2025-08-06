@@ -12,6 +12,8 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "mostactive";
         public string Description => "Displays the most active user by message count.";
+        public string Category => "📊 Info & Stats";
+
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

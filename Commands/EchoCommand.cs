@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System.Threading.Tasks;
 
 namespace MyDiscordBot.Commands
@@ -8,6 +8,8 @@ namespace MyDiscordBot.Commands
         public string Name => "echo";
 
         public string Description => "Command to respond with whatever is requested!";
+
+        public string Category => "🔧 Utility";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

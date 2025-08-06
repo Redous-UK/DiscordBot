@@ -19,6 +19,7 @@ namespace MyDiscordBot.Commands
                     "`!birthday today` – Checks if there is anyones birthday today\n" +
                     "`!birthday tomorrow` - Checks if there is anyones birthday tomorrow\n" +
                     "`!birthday month ?` - Checks and lists out peoples birthday for the given month");
+        public string Category => "⚙️ Settings & Config";
 
 
         private const string FilePath = "birthdays.json";

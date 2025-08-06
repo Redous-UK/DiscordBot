@@ -8,6 +8,7 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "answer";
         public string Description => "Command to Answer the Trivia Question!";
+        public string Category => "🎮 Fun & Games";
 
         private static readonly ConcurrentDictionary<ulong, string> activeQuestions = new();
         private static readonly ConcurrentDictionary<ulong, int> userScores = new();
