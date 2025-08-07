@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
     <StartupObject>MyDiscordBot.Program</StartupObject>
   </PropertyGroup>
   <ItemGroup>
