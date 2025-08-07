@@ -1,4 +1,4 @@
-﻿using Discord.WebSocket;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -9,7 +9,6 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "trivia";
         public string Description => "Command to get the Trivia Question!";
-        public string Category => "🎮 Fun & Games";
 
         private static readonly List<(string question, string answer)> Questions = new()
         {

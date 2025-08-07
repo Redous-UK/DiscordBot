@@ -10,7 +10,6 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "serverinfo";
         public string Description => "Displays information about the current Discord server.";
-        public string Category => "📊 Info & Stats";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {

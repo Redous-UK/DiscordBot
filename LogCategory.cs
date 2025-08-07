@@ -9,7 +9,6 @@
         Reaction,
         Voice,
         JoinLeave,
-        Moderation,
         Other
     }
 }

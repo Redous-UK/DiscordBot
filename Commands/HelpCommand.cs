@@ -1,6 +1,4 @@
-﻿using Discord;
-using Discord.WebSocket;
-using System.Collections.Generic;
+﻿using Discord.WebSocket;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -10,27 +8,18 @@ namespace MyDiscordBot.Commands
     public class HelpCommand : ILegacyCommand
     {
         public string Name => "help";
-        public string Description => "Displays a list of available commands grouped by category.";
+        public string Description => "Lists all available commands.";
+
         public string Category => "🔧 Utility";
 
         public Task ExecuteAsync(SocketMessage message, string[] args)
         {
-            var commands = Bot.BotInstance.GetAllLegacyCommands();
-
-            var grouped = commands
-                .GroupBy(cmd => cmd.Category)
-                .OrderBy(g => g.Key);
-
             var sb = new StringBuilder();
+            sb.AppendLine("?? **Available Commands:**");
 
-            foreach (var group in grouped)
+            foreach (var cmd in Program.BotInstance.GetAllLegacyCommands().OrderBy(c => c.Name))
             {
-                sb.AppendLine($"**{group.Key}**");
-                foreach (var cmd in group.OrderBy(c => c.Name))
-                {
-                    sb.AppendLine($"- `{cmd.Name}` — {cmd.Description}");
-                }
-                sb.AppendLine();
+                sb.AppendLine($"- `{Program.BotInstance.Prefix}{cmd.Name}` \t {cmd.Description}");
             }
 
             return message.Channel.SendMessageAsync(sb.ToString());

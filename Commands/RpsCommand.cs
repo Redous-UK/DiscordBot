@@ -1,4 +1,4 @@
-﻿using Discord.WebSocket;
+using Discord.WebSocket;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -10,7 +10,6 @@ namespace MyDiscordBot.Commands
         public string Name => "rps";
 
         public string Description => "Command to play Rock, Paper, Scissors with the bot";
-        public string Category => "🎮 Fun & Games";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
