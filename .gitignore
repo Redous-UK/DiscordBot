@@ -6,4 +6,5 @@ out/
 *.log
 .vs/
 .env
+.sln
 packages/
