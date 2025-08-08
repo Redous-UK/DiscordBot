@@ -1,4 +1,5 @@
 ﻿using Discord;
+using Discord.Commands;
 using Discord.WebSocket;
 using DotNetEnv;
 using MyDiscordBot.Commands;
@@ -14,6 +15,9 @@ namespace MyDiscordBot
 {
     public class Bot
     {
+        private ReminderService _reminderService;
+        public ReminderService ReminderService => _reminderService;
+
         private DiscordSocketClient _client;
         private string _token;
         private string _prefix;
@@ -50,12 +54,15 @@ namespace MyDiscordBot
             _client.UserVoiceStateUpdated += HandleVoiceStateAsync;
             _client.PresenceUpdated += HandlePresenceUpdatedAsync;
             _client.ReactionAdded += HandleReactionAddedAsync;
+            
 
             _client.Ready += async () =>
             {
                 Console.WriteLine("[READY] Bot is online and Ready event was triggered.");
 
                 LoadSettings();
+
+                _reminderService = new ReminderService(_client);
 
                 foreach (var guild in _client.Guilds)
                 {
@@ -127,19 +134,31 @@ namespace MyDiscordBot
 
         private async Task HandleMessageAsync(SocketMessage message)
         {
+            // Ignore system or bot messages
             if (message.Author.IsBot || string.IsNullOrWhiteSpace(message.Content))
                 return;
 
-            if (!message.Content.StartsWith(_prefix))
+            if (message is not SocketUserMessage userMessage)
                 return;
 
-            var parts = message.Content.Substring(_prefix.Length).Split(' ');
-            var commandName = parts[0].ToLower();
-            var args = parts.Skip(1).ToArray();
+            int argPos = 0;
+            if (!userMessage.HasStringPrefix(_prefix, ref argPos))
+                return;
+
+            var context = new SocketCommandContext(_client, userMessage);
+            var commandName = userMessage.Content.Substring(_prefix.Length).Split(' ')[0].ToLower();
+            var args = userMessage.Content.Substring(_prefix.Length + commandName.Length).Trim().Split(' ');
 
             if (_legacyCommands.TryGetValue(commandName, out var command))
             {
-                await command.ExecuteAsync(message, args);
+                try
+                {
+                    await command.ExecuteAsync(message, args);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Command '{commandName}' failed: {ex.Message}");
+                }
             }
         }
 
@@ -300,5 +319,11 @@ namespace MyDiscordBot
             if (IsLogCategoryEnabled(guildId, category))
                 Console.WriteLine($"[{category}] {message}");
         }
+        public void Shutdown()
+        {
+            _reminderService?.Dispose();
+            // Add more disposables later if needed
+        }
+
     }
 }

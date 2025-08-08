@@ -12,6 +12,8 @@ namespace MyDiscordBot.Commands
         public string Name => "settings";
         public string Description => "Views or updates settings using subcommands.";
 
+        public string Category => "⚙️ Settings & Config";
+
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
             if (message.Channel is not SocketGuildChannel guildChannel)

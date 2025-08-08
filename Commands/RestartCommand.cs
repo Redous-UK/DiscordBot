@@ -29,6 +29,9 @@ namespace MyDiscordBot.Commands
             await message.Channel.SendMessageAsync("🔁 Restarting bot...");
 
             // Delay to let the message go through
+
+            Program.BotInstance.Shutdown();
+
             await Task.Delay(1000);
 
             Environment.Exit(100); // Use exit code 100 for restart

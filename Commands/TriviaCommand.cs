@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -18,6 +18,8 @@ namespace MyDiscordBot.Commands
             ("What language is primarily spoken in Brazil?", "portuguese"),
             ("Who wrote 'Romeo and Juliet'?", "shakespeare")
         };
+
+        public string Category => "🎮 Fun & Games";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
