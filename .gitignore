@@ -1,5 +1,9 @@
-.env
 bin/
 obj/
+out/
+*.user
+*.suo
+*.log
 .vs/
+.env
 packages/
