@@ -1,22 +1,20 @@
-# Use Microsoft's official .NET SDK to build and run
+# Stage 1: Build
 FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
-
-# Create app directory inside container
 WORKDIR /app
 
-# Copy everything into /app
-COPY . .
-
-# Restore dependencies and build
+# Copy csproj and restore as separate layer
+COPY *.csproj ./
 RUN dotnet restore
+
+# Copy everything else
+COPY . ./
+
+# Build app
 RUN dotnet publish -c Release -o out
 
-# Runtime image
+# Stage 2: Runtime
 FROM mcr.microsoft.com/dotnet/aspnet:7.0 AS runtime
 WORKDIR /app
-
-# Copy built output
 COPY --from=build /app/out .
 
-# Run the app
 ENTRYPOINT ["dotnet", "MyDiscordBot.dll"]
