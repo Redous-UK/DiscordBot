@@ -8,4 +8,6 @@ out/
 .env
 .sln
 packages/
+properties/
 App.config
+*.sln
