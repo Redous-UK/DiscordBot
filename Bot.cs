@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 
+
 namespace MyDiscordBot
 {
     public class Bot
@@ -188,9 +189,13 @@ namespace MyDiscordBot
         {
             var today = DateTime.Today;
             var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
+
             if (!File.Exists(birthdayPath))
             {
-                Console.WriteLine("[BirthdayCheck] No birthdays.json file found.");
+                Console.WriteLine("[BirthdayCheck] No birthdays.json file found. Creating a new one...");
+                var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
+                var json = JsonSerializer.Serialize(emptyData, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(birthdayPath, json);
                 return;
             }
 

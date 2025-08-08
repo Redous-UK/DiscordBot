@@ -1,5 +1,4 @@
 using Discord.WebSocket;
-using System.Threading.Tasks;
 
 public interface ILegacyCommand
 {
