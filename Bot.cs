@@ -16,6 +16,7 @@ namespace MyDiscordBot
 {
     public class Bot
     {
+        private bool _didInit = false;
         private ReminderService _reminderService;
         public ReminderService ReminderService => _reminderService;
 
@@ -59,6 +60,9 @@ namespace MyDiscordBot
 
             _client.Ready += async () =>
             {
+                if (_didInit) return;        // <-- guard so Ready code runs only once
+                _didInit = true;
+
                 Console.WriteLine("[READY] Bot is online and Ready event was triggered.");
 
                 LoadSettings();
