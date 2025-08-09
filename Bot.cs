@@ -211,6 +211,11 @@ namespace MyDiscordBot
             File.WriteAllText(SettingsFile, json);
         }
 
+        public void SaveGuildSettings()
+        {
+            SaveSettings();
+        }
+
         public static GuildSettings GetSettings(ulong guildId)
         {
             if (!_guildSettings.ContainsKey(guildId))
