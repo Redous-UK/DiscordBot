@@ -19,15 +19,19 @@ public class ReminderService : IDisposable
     private Dictionary<ulong, List<ReminderEntry>> _reminders = new();
 
     private readonly CancellationTokenSource _cts = new();
+    private static bool _loopStarted = false;
     private Task _loopTask;
 
     public ReminderService(DiscordSocketClient client)
     {
         _client = client;
-
         LoadReminders();
-        // start background processing
-        _loopTask = Task.Run(() => ReminderLoopAsync(_cts.Token));
+
+        if (!_loopStarted)
+        {
+            _loopStarted = true;
+            _loopTask = Task.Run(() => ReminderLoopAsync(_cts.Token));
+        }
     }
 
     public List<ReminderEntry> GetReminders(ulong userId)

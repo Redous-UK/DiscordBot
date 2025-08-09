@@ -11,25 +11,33 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-
 namespace MyDiscordBot
 {
     public class Bot
     {
+        // --- Init / services ---
         private bool _didInit = false;
         private ReminderService _reminderService;
         public ReminderService ReminderService => _reminderService;
 
+        // --- Discord client & config ---
         private DiscordSocketClient _client;
         private string _token;
         private string _prefix;
+
+        // --- Commands & settings ---
         private readonly Dictionary<string, ILegacyCommand> _legacyCommands = new();
         private static Dictionary<ulong, GuildSettings> _guildSettings = new();
         private const string SettingsFile = "guild-settings.json";
 
+        // --- Birthday loop guards / dedupe ---
+        private bool _birthdayLoopStarted = false;
+        private readonly HashSet<string> _birthdaySentToday = new();
+        private DateTime _lastBirthdayResetDate = DateTime.MinValue;
+
         public static Bot BotInstance { get; private set; }
-        public string Prefix => _prefix;
-        public List<ILegacyCommand> GetAllLegacyCommands() => _legacyCommands.Values.ToList();
+        // public string Prefix => _prefix;
+        // public List<ILegacyCommand> GetAllLegacyCommands() => _legacyCommands.Values.ToList();
 
         public async Task RunAsync()
         {
@@ -56,19 +64,22 @@ namespace MyDiscordBot
             _client.UserVoiceStateUpdated += HandleVoiceStateAsync;
             _client.PresenceUpdated += HandlePresenceUpdatedAsync;
             _client.ReactionAdded += HandleReactionAddedAsync;
-            
 
             _client.Ready += async () =>
             {
-                if (_didInit) return;        // <-- guard so Ready code runs only once
+                // Guard: run this block only once per process
+                if (_didInit) return;
                 _didInit = true;
 
                 Console.WriteLine("[READY] Bot is online and Ready event was triggered.");
 
                 LoadSettings();
 
-                _reminderService = new ReminderService(_client);
+                // Create ReminderService ONCE
+                if (_reminderService == null)
+                    _reminderService = new ReminderService(_client);
 
+                // Load commands / set nickname per guild
                 foreach (var guild in _client.Guilds)
                 {
                     LoadLegacyCommandsForGuild(guild.Id);
@@ -84,7 +95,14 @@ namespace MyDiscordBot
                     LogMessage(guild.Id, $"Connected to guild: {guild.Name} ({guild.Id})", LogCategory.Log);
                 }
 
-                _ = RepeatBirthdayCheck();
+                // Start daily birthday loop ONCE
+                if (!_birthdayLoopStarted)
+                {
+                    _birthdayLoopStarted = true;
+                    _ = RepeatBirthdayCheck();
+                }
+
+                // Run an immediate birthday check (deduped below)
                 await CheckBirthdays();
             };
 
@@ -150,9 +168,11 @@ namespace MyDiscordBot
             if (!userMessage.HasStringPrefix(_prefix, ref argPos))
                 return;
 
+            // You create a context but you're not using Commands library here; keeping it is harmless
             var context = new SocketCommandContext(_client, userMessage);
+
             var commandName = userMessage.Content.Substring(_prefix.Length).Split(' ')[0].ToLower();
-            var args = userMessage.Content.Substring(_prefix.Length + commandName.Length).Trim().Split(' ');
+            var args = userMessage.Content.Substring(_prefix.Length + commandName.Length).Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
             if (_legacyCommands.TryGetValue(commandName, out var command))
             {
@@ -171,8 +191,12 @@ namespace MyDiscordBot
         {
             while (true)
             {
-                var nextRun = DateTime.Today.AddDays(1).AddHours(0);
+                // Sleep until next midnight (local)
+                var nextRun = DateTime.Today.AddDays(1); // midnight next day
                 var delay = nextRun - DateTime.Now;
+                if (delay < TimeSpan.FromSeconds(1))
+                    delay = TimeSpan.FromSeconds(1);
+
                 await Task.Delay(delay);
                 await CheckBirthdays();
             }
@@ -188,9 +212,21 @@ namespace MyDiscordBot
             SaveSettings();
         }
 
+        // === Birthday dedupe helpers ===
+        private void ResetBirthdaySentIfNewDay()
+        {
+            var today = DateTime.UtcNow.Date;
+            if (_lastBirthdayResetDate != today)
+            {
+                _birthdaySentToday.Clear();
+                _lastBirthdayResetDate = today;
+            }
+        }
 
         private async Task CheckBirthdays()
         {
+            ResetBirthdaySentIfNewDay();
+
             var today = DateTime.Today;
             var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
 
@@ -204,6 +240,8 @@ namespace MyDiscordBot
             }
 
             var birthdayData = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath));
+            if (birthdayData == null || birthdayData.Count == 0)
+                return;
 
             foreach (var (key, entry) in birthdayData)
             {
@@ -221,10 +259,18 @@ namespace MyDiscordBot
                         guild.CurrentUser.GetPermissions(c).SendMessages &&
                         (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
 
-                    if (channel != null)
+                    if (channel != null && user != null)
                     {
+                        var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
+                        if (_birthdaySentToday.Contains(sentKey))
+                        {
+                            LogMessage(guildId, $"[BirthdayCheck] Skipping duplicate for {entry.Username}", LogCategory.BirthdayCheck);
+                            continue;
+                        }
+
                         LogMessage(guildId, $"🎉 Birthday match for {entry.Username}", LogCategory.BirthdayCheck);
                         await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
+                        _birthdaySentToday.Add(sentKey);
                     }
                     else
                     {
@@ -328,11 +374,11 @@ namespace MyDiscordBot
             if (IsLogCategoryEnabled(guildId, category))
                 Console.WriteLine($"[{category}] {message}");
         }
+
         public void Shutdown()
         {
             _reminderService?.Dispose();
             // Add more disposables later if needed
         }
-
     }
 }
