@@ -17,7 +17,8 @@ namespace MyDiscordBot
     public class Bot
     {
         private bool _didInit = false;
-        public ReminderService _reminderService;
+        private ReminderService _reminderService;
+        public ReminderService ReminderService => _reminderService;
 
         private DiscordSocketClient _client;
         private string _token;
