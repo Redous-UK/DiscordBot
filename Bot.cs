@@ -155,7 +155,7 @@ namespace MyDiscordBot
             foreach (var type in commandTypes)
             {
                 if (type.GetCustomAttribute<ObsoleteAttribute>() != null) continue;
-                var instance = (ILegacyCommand)Activator.CreateInstance(type);
+                var instance = Activator.CreateInstance(type) as ILegacyCommand ?? null!;
                 _legacyCommands[instance.Name.ToLower()] = instance;
             }
 

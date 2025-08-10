@@ -72,7 +72,7 @@ namespace MyDiscordBot.Commands
 
                     if (string.IsNullOrWhiteSpace(value) || value.ToLower() == "clear")
                     {
-                        settings.Nickname = null;
+                        settings.Nickname = null!;
                         try { await botUser.ModifyAsync(p => p.Nickname = null); } catch { }
                         await message.Channel.SendMessageAsync("🔄 Nickname cleared.");
                     }
