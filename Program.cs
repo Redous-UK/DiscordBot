@@ -1,4 +1,6 @@
-﻿using System;
+﻿using MyDiscordBot.Services;
+using StackExchange.Redis;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +11,7 @@ namespace MyDiscordBot
     public static class Program
     {
         public static Bot BotInstance { get; private set; }
+        public static ReminderService ReminderService { get; private set; }  // ← add this
 
         private static ConnectionMultiplexer? _mux;
         private static IDatabase? _db;
@@ -34,7 +37,7 @@ namespace MyDiscordBot
             AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; OnProcessExit(null, EventArgs.Empty); };
 
-            BotInstance = new Bot();
+            BotInstance = new Bot(ReminderService);
             await BotInstance.RunAsync();
         }
 
