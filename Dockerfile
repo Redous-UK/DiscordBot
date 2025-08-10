@@ -1,23 +1,22 @@
-# Stage 1: Build
-FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
-WORKDIR /app
+# ---- build stage ----
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
 
-# Copy the .csproj file and restore dependencies
+# 1) Copy project file(s) and restore (cacheable)
 COPY MyDiscordBot.csproj ./
-RUN dotnet restore
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet restore --nologo
 
-# Copy the rest of the source code
-COPY . ./
+# 2) Copy the rest and publish (reuse caches)
+COPY . .
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    --mount=type=cache,target=/src/obj \
+    dotnet publish -c Release -o /out --no-restore
 
-# Publish the application to /out folder
-RUN dotnet publish -c Release -o out
-
-# Stage 2: Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:7.0 AS runtime
+# ---- runtime stage ----
+FROM mcr.microsoft.com/dotnet/runtime:8.0
 WORKDIR /app
-
-# Copy the published app from the build stage
-COPY --from=build /app/out .
-
-# Run the bot
-ENTRYPOINT ["dotnet", "MyDiscordBot.dll"]
+COPY --from=build /out ./
+# If your app doesn't need full ICU:
+# ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+CMD ["dotnet", "MyDiscordBot.dll"]
