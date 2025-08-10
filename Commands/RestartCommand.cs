@@ -30,7 +30,7 @@ namespace MyDiscordBot.Commands
 
             // Delay to let the message go through
 
-            Program.BotInstance.Shutdown();
+            Program.BotInstance.Dispose();
 
             await Task.Delay(1000);
 
