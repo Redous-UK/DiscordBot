@@ -1,9 +1,10 @@
-﻿using MyDiscordBot.Services;
-using StackExchange.Redis;
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
+using StackExchange.Redis;
+using MyDiscordBot.Services;
 
 namespace MyDiscordBot
 {
@@ -12,6 +13,7 @@ namespace MyDiscordBot
         public static Bot BotInstance { get; private set; } = null!;
         public static ReminderService ReminderService { get; private set; } = null!;
 
+        // --- Redis leader lock fields ---
         private static ConnectionMultiplexer? _mux;
         private static IDatabase? _db;
         private static string _lockKey = "mydiscordbot:leader";
@@ -20,25 +22,37 @@ namespace MyDiscordBot
 
         public static async Task Main(string[] args)
         {
-            // --- Visibility: prove if REDIS_URL arrived at runtime ---
+            // Visibility: prove env var arrived
             var rawUrl = Environment.GetEnvironmentVariable("REDIS_URL");
             Console.WriteLine($"[leader] REDIS_URL present? {!string.IsNullOrWhiteSpace(rawUrl)} len={(rawUrl?.Length ?? 0)}");
 
-            // Acquire leader lock (non-fatal if REDIS_URL missing)
+            // Configure leader-lock behavior
             var ttl = TimeSpan.FromSeconds(30);
-            if (!await TryAcquireLeaderAsync(ttl))
+            var waitForRedis = TimeSpan.FromSeconds(12);                 // how long to wait for initial connect
+            var required = Environment.GetEnvironmentVariable("LEADER_LOCK_REQUIRED") == "1";
+
+            // Try to init leader lock (non-blocking if Redis is down unless required)
+            var ok = await InitLeaderLockAsync(ttl, waitForRedis, required);
+            if (!ok)
             {
-                Console.WriteLine("[leader] Another instance is active. Exiting.");
-                return; // don't start the bot if we didn't acquire the lock
+                Console.WriteLine("[leader] Another instance holds the lock. Exiting.");
+                return;
             }
 
-            // Release lock on shutdown
+            // Create services AFTER lock decision
+            ReminderService = new ReminderService();
+            Console.WriteLine("[reminders] service ready.");
+
+            BotInstance = new Bot(ReminderService);
+
+            // Clean shutdown
             AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; OnProcessExit(null, EventArgs.Empty); };
 
-            BotInstance = new Bot(ReminderService);
             await BotInstance.RunAsync();
         }
+
+        // --- Redis lock helpers ---
 
         private static string? GetRedisUrlFromEnv()
         {
@@ -50,55 +64,67 @@ namespace MyDiscordBot
             return null;
         }
 
-        private static async Task<bool> TryAcquireLeaderAsync(TimeSpan ttl)
+        private static async Task<bool> InitLeaderLockAsync(TimeSpan ttl, TimeSpan waitBeforeGivingUp, bool required)
         {
+            var url = GetRedisUrlFromEnv();
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                Console.WriteLine("[leader] No Redis URL found. Running WITHOUT leader lock.");
+                return true; // or 'return !required;' if you want to enforce having Redis
+            }
+
+            var options = ConfigurationOptions.Parse(url, ignoreUnknown: true);
+            options.AbortOnConnectFail = false; // keep retrying in background
+            options.ConnectRetry = 5;
+            options.ConnectTimeout = 15000;
+            options.SyncTimeout = 15000;
+            options.KeepAlive = 15;
+            options.ResolveDns = true;
+
             try
             {
-                var url = GetRedisUrlFromEnv();
-                if (string.IsNullOrWhiteSpace(url))
-                {
-                    Console.WriteLine("[leader] No Redis URL found. Running WITHOUT leader lock.");
-                    return true;
-                }
-
-                // Parse URI (handles rediss:// and user:pass@host:port)
-                var options = ConfigurationOptions.Parse(url, ignoreUnknown: true);
-                options.AbortOnConnectFail = false;   // keep retrying in background
-                options.ConnectRetry = 5;
-                options.ConnectTimeout = 10000;       // 10s
-                options.KeepAlive = 15;               // seconds
-                options.ResolveDns = true;
-
-                // If you want to be explicit (usually not needed when using rediss://)
-                if (options.Ssl)                      // true for rediss://
-                {
-                    // options.SslHost = options.EndPoints.First().ToString(); // optional
-                }
-
                 _mux = await ConnectionMultiplexer.ConnectAsync(options);
-                _db = _mux.GetDatabase();
 
+                // Useful diagnostics
+                _mux.ConnectionFailed += (_, e) => Console.WriteLine($"[redis] ConnectionFailed: {e.FailureType} {e.Exception?.Message}");
+                _mux.ConnectionRestored += (_, __) => Console.WriteLine("[redis] ConnectionRestored");
+                _mux.ConfigurationChanged += (_, __) => Console.WriteLine("[redis] ConfigurationChanged");
+
+                // Wait briefly for initial connectivity, then proceed
+                var sw = Stopwatch.StartNew();
+                while (!_mux.IsConnected && sw.Elapsed < waitBeforeGivingUp)
+                    await Task.Delay(500);
+
+                if (!_mux.IsConnected)
+                {
+                    Console.WriteLine($"[leader] Redis not reachable after {waitBeforeGivingUp.TotalSeconds:n0}s.");
+                    return !required; // proceed without lock if not required
+                }
+
+                _db = _mux.GetDatabase();
                 _lockKey = Environment.GetEnvironmentVariable("LEADER_LOCK_KEY") ?? _lockKey;
 
                 var instanceId = Environment.GetEnvironmentVariable("RENDER_INSTANCE_ID");
-                if (!string.IsNullOrWhiteSpace(instanceId)) _lockValue = instanceId;
+                if (!string.IsNullOrWhiteSpace(instanceId))
+                    _lockValue = instanceId;
 
-                // Acquire once (NX + TTL)
+                // Acquire: NX + TTL
                 var acquired = await _db.StringSetAsync(_lockKey, _lockValue, ttl, When.NotExists);
                 var ep = _mux.GetEndPoints().FirstOrDefault();
                 Console.WriteLine($"[leader] Lock '{_lockKey}' → {(acquired ? "acquired" : "already held")} | endpoint={ep}");
 
-                if (!acquired) return false;
+                if (!acquired) return false; // another instance is leader
 
+                // Start renewer
                 _renewCts = new CancellationTokenSource();
                 _ = Task.Run(() => RenewLoopAsync(ttl, _renewCts.Token));
                 return true;
             }
             catch (Exception ex)
             {
-                // Don’t crash the bot just because Redis hiccuped
-                Console.WriteLine("[leader] Redis connect/lock error: " + ex.Message);
-                return true; // set to 'false' if you prefer hard-fail when lock unavailable
+                Console.WriteLine("[leader] Redis connect error: " + ex.Message);
+                // Continue without lock unless strictly required
+                return !required;
             }
         }
 
@@ -114,23 +140,23 @@ namespace MyDiscordBot
                     await Task.Delay(delay, ct);
                     if (_db == null) break;
 
-                    // Renew TTL only if we still own the lock
+                    // Renew TTL only if we still own the lock (transactional, no Lua)
                     var tran = _db.CreateTransaction();
                     tran.AddCondition(Condition.StringEqual(_lockKey, _lockValue));
-                    _ = tran.KeyExpireAsync(_lockKey, ttl); // queue op under the condition
+                    _ = tran.KeyExpireAsync(_lockKey, ttl);
 
                     bool ok = await tran.ExecuteAsync();
                     if (!ok)
                     {
-                        Console.WriteLine("[leader] Lost leader lock (renew failed); exiting.");
+                        Console.WriteLine("[leader] Lost leader lock; exiting.");
                         Environment.Exit(0);
                     }
                 }
-                catch (TaskCanceledException) { /* shutdown */ }
+                catch (TaskCanceledException) { /* normal on shutdown */ }
                 catch (Exception ex)
                 {
                     Console.WriteLine("[leader] Renew error: " + ex.Message);
-                    // transient; will retry next tick
+                    // try again next tick
                 }
             }
         }
@@ -143,11 +169,11 @@ namespace MyDiscordBot
 
                 if (_db != null)
                 {
-                    // Delete only if we still own the lock
+                    // Release lock only if we still own it
                     var tran = _db.CreateTransaction();
                     tran.AddCondition(Condition.StringEqual(_lockKey, _lockValue));
                     _ = tran.KeyDeleteAsync(_lockKey);
-                    _ = tran.Execute(); // sync is fine during process exit
+                    _ = tran.Execute(); // sync is fine during shutdown
                 }
 
                 _mux?.Dispose();

@@ -270,7 +270,7 @@ namespace MyDiscordBot
         }
 
         // Add a static readonly field to cache the JsonSerializerOptions instance
-        private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new JsonSerializerOptions { WriteIndented = true };
+        private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new() { WriteIndented = true };
 
         // Update the SaveSettings method to use the cached instance
         private static void SaveSettings()
