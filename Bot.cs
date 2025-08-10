@@ -14,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MyDiscordBot.Models;
 using MyDiscordBot.Services;
+using System.Diagnostics;
 
 namespace MyDiscordBot
 {
@@ -133,8 +134,6 @@ namespace MyDiscordBot
 
             }
 
-
-
             if (!_birthdayLoopStarted)
             {
                 _birthdayLoopStarted = true;
@@ -144,6 +143,18 @@ namespace MyDiscordBot
             Console.WriteLine("[READY] init end");
             return Task.CompletedTask;
         }
+
+        private static string FormatContext(SocketMessage msg)
+        {
+            var guild = (msg.Channel as SocketGuildChannel)?.Guild;
+            var guildPart = guild is null ? "DM" : $"{guild.Name}({guild.Id})";
+            var channelName = (msg.Channel as SocketGuildChannel)?.Name ?? "DM";
+            var channelPart = $"{channelName}({msg.Channel.Id})";
+            var user = msg.Author;
+            var userPart = $"{user.Username}#{user.Discriminator}({user.Id})";
+            return $"guild={guildPart} chan={channelPart} user={userPart}";
+        }
+
 
         // Rename one of the duplicate methods to resolve the conflict
         private async Task CheckBirthdaysInternal()
@@ -393,38 +404,45 @@ namespace MyDiscordBot
             if (!userMessage.HasStringPrefix(_prefix, ref argPos))
                 return;
 
-            // Use strings instead of Span<char> to stay C# 11 compatible
+            // Parse: command + rest
             var content = userMessage.Content.Substring(argPos).Trim();
-
-            // Split once into command + rest
-            string commandName;
-            string argRest = string.Empty;
+            string commandName, argRest = string.Empty;
 
             int firstSpace = content.IndexOf(' ');
             if (firstSpace < 0)
-            {
                 commandName = content.ToLowerInvariant();
-            }
             else
             {
                 commandName = content.Substring(0, firstSpace).ToLowerInvariant();
                 argRest = content.Substring(firstSpace + 1);
             }
 
-            var args = string.IsNullOrWhiteSpace(argRest)
-                ? []
-                : argRest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var ctx = FormatContext(message);
+            var sw = Stopwatch.StartNew();
 
-            if (_legacyCommands.TryGetValue(commandName, out var command))
+            if (!_legacyCommands.TryGetValue(commandName, out var command))
             {
-                try
-                {
-                    await command.ExecuteAsync(message, args);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ERROR] Command '{commandName}' failed: {ex.Message}");
-                }
+                Console.WriteLine($"[CMD] unknown '{commandName}' args=\"{argRest}\" | {ctx}");
+                return;
+            }
+
+            Console.WriteLine($"[CMD] start '{commandName}' args=\"{argRest}\" | {ctx}");
+            try
+            {
+                var args = string.IsNullOrWhiteSpace(argRest)
+                    ? Array.Empty<string>()
+                    : argRest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+                await command.ExecuteAsync(message, args);
+
+                sw.Stop();
+                Console.WriteLine($"[CMD] ok    '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}");
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                Console.WriteLine($"[CMD] fail  '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}\n{ex}");
+                // Optional: rethrow or swallow; you already catch at caller
             }
         }
 
