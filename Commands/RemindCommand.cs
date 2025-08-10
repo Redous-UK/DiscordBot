@@ -37,13 +37,16 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var entry = new ReminderEntry
-            {
-                Message = reminderMessage,
-                Time = remindTimeUtc
-            };
+            // Optional: support repeats like "--every 60"
+            int? repeatMinutes = null;
+            // If you plan to support it later, parse args here and set repeatMinutes
 
-            reminderService.AddReminder(message.Author.Id, entry);
+            reminderService.AddReminder(
+                message.Author.Id,
+                remindTimeUtc,
+                reminderMessage,
+                repeatMinutes
+            );
 
             await message.Channel.SendMessageAsync($":alarm_clock: I'll remind you in {DescribeDelta(remindTimeUtc - DateTime.UtcNow)}: \"{reminderMessage}\"");
         }
