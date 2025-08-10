@@ -17,7 +17,7 @@ using MyDiscordBot.Services;
 
 namespace MyDiscordBot
 {
-    public class Bot
+    public class Bot : IDisposable
     {
         // --- Lifecycle/guards ---
         private volatile bool _didInit = false;
@@ -32,8 +32,9 @@ namespace MyDiscordBot
         private DateTime _lastBirthdayResetDate = DateTime.MinValue;
 
         // --- Services ---
-        private ReminderService _reminderService;
-        public ReminderService ReminderService => _reminderService;
+        //private ReminderService _reminderService;
+        //public ReminderService ReminderService => _reminderService;
+        public ReminderService ReminderService { get; }
 
         // --- Discord client & config ---
         public DiscordSocketClient _client;
@@ -181,6 +182,13 @@ namespace MyDiscordBot
             {
                 _guildSettings = new Dictionary<ulong, GuildSettings>();
             }
+        }
+
+
+        public Bot(ReminderService reminderService)
+        {
+            ReminderService = reminderService;
+            // init client, register handlers, etc.
         }
 
         private void SaveSettings()
@@ -394,9 +402,10 @@ namespace MyDiscordBot
                 Console.WriteLine($"[{category}] {message}");
         }
 
-        public void Shutdown()
+        public void Dispose()
         {
-            _reminderService?.Dispose();
+            //_reminderService?.Dispose();
+            ReminderService?.Dispose();
             // add more disposables if needed
         }
     }
