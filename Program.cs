@@ -57,20 +57,33 @@ namespace MyDiscordBot
                 var url = GetRedisUrlFromEnv();
                 if (string.IsNullOrWhiteSpace(url))
                 {
-                    // No Redis configured: run without a lock (change to 'return false' to hard-require Redis)
                     Console.WriteLine("[leader] No Redis URL found. Running WITHOUT leader lock.");
                     return true;
                 }
 
-                _mux = await ConnectionMultiplexer.ConnectAsync(url);
+                // Parse URI (handles rediss:// and user:pass@host:port)
+                var options = ConfigurationOptions.Parse(url, ignoreUnknown: true);
+                options.AbortOnConnectFail = false;   // keep retrying in background
+                options.ConnectRetry = 5;
+                options.ConnectTimeout = 10000;       // 10s
+                options.KeepAlive = 15;               // seconds
+                options.ResolveDns = true;
+
+                // If you want to be explicit (usually not needed when using rediss://)
+                if (options.Ssl)                      // true for rediss://
+                {
+                    // options.SslHost = options.EndPoints.First().ToString(); // optional
+                }
+
+                _mux = await ConnectionMultiplexer.ConnectAsync(options);
                 _db = _mux.GetDatabase();
 
                 _lockKey = Environment.GetEnvironmentVariable("LEADER_LOCK_KEY") ?? _lockKey;
 
                 var instanceId = Environment.GetEnvironmentVariable("RENDER_INSTANCE_ID");
-                if (!string.IsNullOrWhiteSpace(instanceId))
-                    _lockValue = instanceId;
+                if (!string.IsNullOrWhiteSpace(instanceId)) _lockValue = instanceId;
 
+                // Acquire once (NX + TTL)
                 var acquired = await _db.StringSetAsync(_lockKey, _lockValue, ttl, When.NotExists);
                 var ep = _mux.GetEndPoints().FirstOrDefault();
                 Console.WriteLine($"[leader] Lock '{_lockKey}' → {(acquired ? "acquired" : "already held")} | endpoint={ep}");
@@ -83,11 +96,12 @@ namespace MyDiscordBot
             }
             catch (Exception ex)
             {
+                // Don’t crash the bot just because Redis hiccuped
                 Console.WriteLine("[leader] Redis connect/lock error: " + ex.Message);
-                // Choose your policy:
-                return true; // keep running without lock; set to 'false' to abort on failure
+                return true; // set to 'false' if you prefer hard-fail when lock unavailable
             }
         }
+
 
         private static async Task RenewLoopAsync(TimeSpan ttl, CancellationToken ct)
         {
