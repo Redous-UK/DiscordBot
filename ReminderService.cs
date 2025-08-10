@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using MyDiscordBot.Models;
 
 namespace MyDiscordBot.Services
 {
@@ -29,8 +30,48 @@ namespace MyDiscordBot.Services
 
         public ReminderService(string? dbPath = null)
         {
-            _dbPath = dbPath ?? Path.Combine(AppContext.BaseDirectory, "reminders.json");
+            var dataDir = ResolveDataDir();
+            var target = dbPath ?? Path.Combine(dataDir, "reminders.json");
+            var legacy = Path.Combine(AppContext.BaseDirectory, "reminders.json");
+
+            // One-time migration from legacy location to the persistent disk
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (File.Exists(legacy) && !File.Exists(target))
+                {
+                    File.Move(legacy, target);
+                }
+            }
+            catch { /* best-effort migration */ }
+
+            _dbPath = target;
             Load();
+        }
+
+        private static string ResolveDataDir()
+        {
+            var candidates = new[]
+            {
+                Environment.GetEnvironmentVariable("DATA_DIR"),         // e.g., "/data" (your current setting)
+                Environment.GetEnvironmentVariable("RENDER_DISK_PATH"),  // Render exposes this for mounted disks
+                "/data",                                               // common mount path
+                "/var/data"                                            // another common choice
+            };
+
+            foreach (var p in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(p)) continue;
+                try
+                {
+                    Directory.CreateDirectory(p);
+                    return p;
+                }
+                catch { /* try next candidate */ }
+            }
+
+            // Fallback to app directory if no disk is available
+            return AppContext.BaseDirectory;
         }
 
         public List<Reminder> GetReminders(ulong userId)
