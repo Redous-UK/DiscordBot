@@ -47,6 +47,52 @@ namespace MyDiscordBot.Services
             Load();
         }
 
+        public Dictionary<ulong, List<Reminder>> PopDueRemindersForAll(DateTime? nowUtc = null)
+        {
+            nowUtc ??= DateTime.UtcNow;
+            var result = new Dictionary<ulong, List<Reminder>>();
+
+            lock (_sync)
+            {
+                foreach (var kv in _store)
+                {
+                    var userId = kv.Key;
+                    var list = kv.Value;
+
+                    List<Reminder>? due = null;
+
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var r = list[i];
+                        if (r.Time <= nowUtc.Value)
+                        {
+                            (due ??= new List<Reminder>()).Add(r);
+
+                            if (r.RepeatMinutes is int minutes && minutes > 0)
+                            {
+                                var next = r.Time;
+                                var step = TimeSpan.FromMinutes(minutes);
+                                while (next <= nowUtc.Value) next = next.Add(step);
+                                r.Time = next; // keep it
+                            }
+                            else
+                            {
+                                list.RemoveAt(i);
+                                i--;
+                            }
+                        }
+                    }
+
+                    if (due != null && due.Count > 0)
+                        result[userId] = due;
+                }
+
+                Save_NoLock();
+            }
+
+            return result;
+        }
+
         private static string ResolveDataDir()
         {
             var candidates = new[]

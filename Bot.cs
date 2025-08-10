@@ -32,8 +32,7 @@ namespace MyDiscordBot
         private DateTime _lastBirthdayResetDate = DateTime.MinValue;
 
         // --- Services ---
-        //private ReminderService _reminderService;
-        //public ReminderService ReminderService => _reminderService;
+        private volatile bool _reminderLoopStarted = false;
         public ReminderService ReminderService { get; } = reminderService;// init client, register handlers, etc.
 
         // --- Discord client & config ---
@@ -125,7 +124,16 @@ namespace MyDiscordBot
                 }
 
                 LogMessage(guild.Id, $"Connected to guild: {guild.Name} ({guild.Id})", LogCategory.Log);
+
+                if (!_reminderLoopStarted)
+                {
+                    _reminderLoopStarted = true;
+                    _ = RepeatReminderDispatchAsync();
+                }
+
             }
+
+
 
             if (!_birthdayLoopStarted)
             {
@@ -175,6 +183,46 @@ namespace MyDiscordBot
 
                 await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
                 _birthdaySentToday.Add(sentKey);
+            }
+        }
+
+        private async Task RepeatReminderDispatchAsync()
+        {
+            // poll every 15s; adjust if you like
+            var interval = TimeSpan.FromSeconds(15);
+            while (true)
+            {
+                await Task.Delay(interval);
+                await DispatchDueRemindersOnceAsync();
+            }
+        }
+
+        private async Task DispatchDueRemindersOnceAsync()
+        {
+            var batches = Program.ReminderService.PopDueRemindersForAll();
+
+            foreach (var kv in batches)
+            {
+                var userId = kv.Key;
+                var reminders = kv.Value;
+
+                // Replace the problematic line with the following code to resolve the type mismatch issue:
+                var user = _client.GetUser(userId) as IUser ?? await _client.Rest.GetUserAsync(userId);
+                if (user == null) continue;
+
+                try
+                {
+                    var dm = await user.CreateDMChannelAsync();
+                    foreach (var r in reminders)
+                    {
+                        await dm.SendMessageAsync($":alarm_clock: **Reminder:** {r.Message}  •  (due {r.Time:u})");
+                    }
+                }
+                catch
+                {
+                    // DM blocked; nothing else to post to (we don’t store channel IDs)
+                    Console.WriteLine($"[reminders] Could not DM user {userId}.");
+                }
             }
         }
 
