@@ -394,10 +394,10 @@ namespace MyDiscordBot
                 Console.WriteLine($"[{category}] {message}");
         }
 
-        /*public void Shutdown()
+        public void Shutdown()
         {
             _reminderService?.Dispose();
             // add more disposables if needed
-        }*/
+        }
     }
 }

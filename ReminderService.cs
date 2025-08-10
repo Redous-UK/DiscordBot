@@ -1,15 +1,15 @@
-﻿using System;
+﻿using MyDiscordBot.Models;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using MyDiscordBot.Models;
 
 namespace MyDiscordBot.Services
 {
-    public class ReminderService
+    public class ReminderService : IDisposable
     {
         private readonly object _sync = new();
         private readonly string _dbPath;
@@ -24,6 +24,8 @@ namespace MyDiscordBot.Services
             // DateTime is handled as ISO-8601; no custom converters needed.
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
+
+        private bool _disposed;
 
         public ReminderService(string? dbPath = null)
         {
@@ -82,10 +84,6 @@ namespace MyDiscordBot.Services
             }
         }
 
-        /// <summary>
-        /// Returns reminders due at/Before now (UTC) for the user. If recurring, bumps the time forward.
-        /// Persists any changes.
-        /// </summary>
         public List<Reminder> PopDueReminders(ulong userId, DateTime? nowUtc = null)
         {
             nowUtc ??= DateTime.UtcNow;
@@ -105,7 +103,6 @@ namespace MyDiscordBot.Services
 
                         if (r.RepeatMinutes is int minutes && minutes > 0)
                         {
-                            // advance to next occurrence strictly after now
                             var next = r.Time;
                             var step = TimeSpan.FromMinutes(minutes);
                             while (next <= nowUtc.Value) next = next.Add(step);
@@ -113,7 +110,6 @@ namespace MyDiscordBot.Services
                         }
                         else
                         {
-                            // one-shot: remove after firing
                             list.RemoveAt(i);
                             i--;
                         }
@@ -142,7 +138,6 @@ namespace MyDiscordBot.Services
             }
             catch
             {
-                // If the file is corrupt, fall back to empty to keep bot alive.
                 _store = new Dictionary<ulong, List<Reminder>>();
             }
         }
@@ -152,6 +147,19 @@ namespace MyDiscordBot.Services
             var json = JsonSerializer.Serialize(_store, _jsonOptions);
             Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
             File.WriteAllText(_dbPath, json);
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                lock (_sync)
+                {
+                    Save_NoLock();
+                }
+                _disposed = true;
+            }
+            GC.SuppressFinalize(this);
         }
     }
 }
