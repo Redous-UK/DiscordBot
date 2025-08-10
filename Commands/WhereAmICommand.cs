@@ -9,7 +9,7 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "whereami";
         public string Description => "Show which deployment instance is running this bot.";
-        public string Category => "🔧 Utility";
+        public string Category => "🛠️ Moderation";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
