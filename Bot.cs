@@ -317,19 +317,27 @@ namespace MyDiscordBot
 
         private static void SaveSettings()
         {
-            try
+            lock (_settingsSync)
             {
-                var json = JsonSerializer.Serialize(_guildSettings, CachedJsonSerializerOptions);
-                SafeWrite(SettingsFile, json);
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
+                    var json = JsonSerializer.Serialize(_guildSettings, CachedJsonSerializerOptions);
+                    SafeWrite(SettingsFile, json);
+                    Console.WriteLine($"[settings] saved {_guildSettings.Count} guilds to {SettingsFile}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[settings] save FAILED: {ex.Message}");
+                }
             }
-            catch { /* best-effort */ }
         }
 
         private static void SafeWrite(string path, string json)
         {
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
-            File.Move(tmp, path, true);
+            File.Move(tmp, path, true); // atomic replace on same filesystem
         }
 
         public static void SaveGuildSettings() => SaveSettings();
