@@ -21,7 +21,7 @@ namespace MyDiscordBot.Commands
             }
 
             SocketGuildUser user = message.MentionedUsers.FirstOrDefault() as SocketGuildUser
-                                   ?? message.Author as SocketGuildUser;
+                                   ?? message.Author as SocketGuildUser ?? null!;
 
             if (user == null)
             {

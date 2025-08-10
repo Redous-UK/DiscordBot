@@ -32,7 +32,7 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var data = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(path));
+            var data = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(path)) ?? null!;
             var guildData = data
                 .Where(kvp => kvp.Key.StartsWith(guildId.ToString()))
                 .ToDictionary(kvp => kvp.Key.Split('-')[1], kvp => kvp.Value);

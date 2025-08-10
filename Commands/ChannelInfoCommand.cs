@@ -21,7 +21,7 @@ namespace MyDiscordBot.Commands
             }
 
             var guild = guildChannel.Guild;
-            SocketGuildChannel targetChannel = null;
+            SocketGuildChannel targetChannel = null!;
 
             if (args.Length == 0)
             {
@@ -30,7 +30,7 @@ namespace MyDiscordBot.Commands
             else
             {
                 string search = string.Join(" ", args).ToLower();
-                targetChannel = guild.Channels.FirstOrDefault(c => c.Name.ToLower() == search);
+                targetChannel = guild.Channels.FirstOrDefault(c => c.Name.ToLower(System.Globalization.CultureInfo.CurrentCulture) == search) ?? null!;
             }
 
             if (targetChannel == null)

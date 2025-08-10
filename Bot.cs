@@ -51,7 +51,7 @@ namespace MyDiscordBot
             return _legacyCommands.Values.ToList();
         }
 
-        public static Bot BotInstance { get; private set; }
+        public static Bot BotInstance { get; private set; } = null!;
 
         public DiscordSocketClient GetClient()
         {
@@ -63,7 +63,7 @@ namespace MyDiscordBot
             BotInstance = this;
 
             Env.Load();
-            _token = Environment.GetEnvironmentVariable("DISCORD_TOKEN");
+            _token = Environment.GetEnvironmentVariable("DISCORD_TOKEN") ?? null!;
             _prefix = Environment.GetEnvironmentVariable("PREFIX") ?? "!";
 
             _client = new DiscordSocketClient(new DiscordSocketConfig

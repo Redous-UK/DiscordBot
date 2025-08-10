@@ -19,7 +19,7 @@ namespace MyDiscordBot.Commands
             var rand = new Random();
             string botChoice = choices[rand.Next(choices.Length)];
 
-            string userChoice = args.Length > 0 ? args[0].ToLower() : null;
+            string userChoice = args.Length > 0 ? args[0].ToLower() : null!;
 
             if (!choices.Contains(userChoice))
             {

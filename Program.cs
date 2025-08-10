@@ -102,7 +102,6 @@ namespace MyDiscordBot
             }
         }
 
-
         private static async Task RenewLoopAsync(TimeSpan ttl, CancellationToken ct)
         {
             var delay = ttl - TimeSpan.FromSeconds(5);

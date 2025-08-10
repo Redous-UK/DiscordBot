@@ -15,7 +15,8 @@ namespace MyDiscordBot.Commands
 
         public static void SetQuestion(ulong userId, string answer)
         {
-            activeQuestions[userId] = answer;
+            // store a normalized answer for easy comparison
+            activeQuestions[userId] = answer.Trim().ToLowerInvariant();
         }
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
@@ -26,10 +27,10 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            string userAnswer = string.Join(" ", args).ToLower();
+            string userAnswer = string.Join(" ", args).Trim().ToLowerInvariant();
             ulong userId = message.Author.Id;
 
-            if (!activeQuestions.TryGetValue(userId, out string correctAnswer))
+            if (!activeQuestions.TryGetValue(userId, out string? correctAnswer))
             {
                 await message.Channel.SendMessageAsync("You don't have an active trivia question. Use `!trivia` first.");
                 return;
@@ -42,11 +43,15 @@ namespace MyDiscordBot.Commands
             }
             else
             {
-                await message.Channel.SendMessageAsync($"❌ Nope! The correct answer was **{correctAnswer}**. Your score remains {(userScores.TryGetValue(userId, out int score) ? score : 0)}.");
+                // If you want to show the original-cased answer, store it separately.
+                await message.Channel.SendMessageAsync(
+                    $"❌ Nope! The correct answer was **{correctAnswer}**. " +
+                    $"Your score remains {(userScores.TryGetValue(userId, out int score) ? score : 0)}."
+                );
             }
 
             activeQuestions.TryRemove(userId, out _);
         }
-
     }
+
 }
