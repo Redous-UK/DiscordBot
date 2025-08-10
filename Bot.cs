@@ -42,6 +42,7 @@ namespace MyDiscordBot
         private readonly Dictionary<string, ILegacyCommand> _legacyCommands = new(StringComparer.OrdinalIgnoreCase);
         private static Dictionary<ulong, GuildSettings> _guildSettings = new();
         private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new() { WriteIndented = true };
+        private static readonly object _settingsSync = new();
 
         // data files (persisted to disk)
         private static readonly string DataDir = ResolveDataDir();
@@ -277,20 +278,39 @@ namespace MyDiscordBot
         {
             try
             {
-                if (File.Exists(SettingsFile))
-                {
-                    var json = File.ReadAllText(SettingsFile);
-                    _guildSettings = JsonSerializer.Deserialize<Dictionary<ulong, GuildSettings>>(json)
-                                     ?? new Dictionary<ulong, GuildSettings>();
-                }
-                else
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
+
+                if (!File.Exists(SettingsFile))
                 {
                     _guildSettings = new Dictionary<ulong, GuildSettings>();
                     SafeWrite(SettingsFile, JsonSerializer.Serialize(_guildSettings, CachedJsonSerializerOptions));
+                    Console.WriteLine($"[settings] created new file at {SettingsFile}");
+                    return;
                 }
+
+                var json = File.ReadAllText(SettingsFile);
+                var data = JsonSerializer.Deserialize<Dictionary<ulong, GuildSettings>>(json)
+                           ?? new Dictionary<ulong, GuildSettings>();
+
+                // hydrate null collections
+                foreach (var kv in data)
+                    // Fix for CS0019 and CS8619
+                    // Replace the following line:
+                    // kv.Value.LogCategories ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    // With the following code:
+                    if (kv.Value.LogCategories == null)
+                    {
+                        kv.Value.LogCategories = new List<string>();
+                    }
+                //kv.Value.LogCategories ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                _guildSettings = data;
+                Console.WriteLine($"[settings] loaded {_guildSettings.Count} guilds from {SettingsFile}");
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"[settings] load FAILED: {ex.Message}");
                 _guildSettings = new Dictionary<ulong, GuildSettings>();
             }
         }
