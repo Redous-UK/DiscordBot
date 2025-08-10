@@ -1,12 +1,13 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 
-namespace MyDiscordBot
+namespace MyDiscordBot.Models
 {
     public class GuildSettings
     {
-        public ulong BirthdayChannelId { get; set; }
-        public List<string> LogCategories { get; set; } = new();
         public bool DebugEnabled { get; set; }
-        public string Nickname { get; set; } = null!;
+        public string Nickname { get; set; } = string.Empty;
+        public ulong BirthdayChannelId { get; set; }
+        public HashSet<string> LogCategories { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

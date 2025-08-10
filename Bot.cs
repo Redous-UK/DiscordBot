@@ -23,7 +23,7 @@ namespace MyDiscordBot
         private volatile bool _commandsLoaded = false;
         private volatile bool _birthdayLoopStarted = false;
 
-        // prevent concurrent CheckBirthdays runs (future-proofing)
+        // prevent concurrent birthday checks
         private readonly SemaphoreSlim _birthdayCheckGate = new(1, 1);
 
         // dedupe birthday posts per day
@@ -42,12 +42,12 @@ namespace MyDiscordBot
         private readonly Dictionary<string, ILegacyCommand> _legacyCommands = new(StringComparer.OrdinalIgnoreCase);
         private static Dictionary<ulong, GuildSettings> _guildSettings = new();
         private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new() { WriteIndented = true };
-        private static readonly object _settingsSync = new();
 
-        // data files (persisted to disk)
+        // settings persistence (Render disk)
         private static readonly string DataDir = ResolveDataDir();
         private static readonly string SettingsFile = Path.Combine(DataDir, "guild-settings.json");
         private static readonly string BirthdaysFile = Path.Combine(DataDir, "birthdays.json");
+        private static readonly object _settingsSync = new();
 
         public static Bot BotInstance { get; private set; } = null!;
 
@@ -57,7 +57,6 @@ namespace MyDiscordBot
         }
 
         public DiscordSocketClient GetClient() => _client;
-
         public List<ILegacyCommand> GetAllLegacyCommands() => _legacyCommands.Values.ToList();
 
         public async Task RunAsync()
@@ -81,7 +80,7 @@ namespace MyDiscordBot
                     | GatewayIntents.GuildPresences
             });
 
-            // Core logs + event wiring
+            // wire events
             _client.Log += Log;
             _client.MessageReceived += HandleMessageAsync;
 
@@ -91,19 +90,11 @@ namespace MyDiscordBot
             _client.PresenceUpdated += HandlePresenceUpdatedAsync;
             _client.ReactionAdded += HandleReactionAddedAsync;
 
-            // Guild join/leave visibility (helps debug invite issues)
-            _client.JoinedGuild += g =>
-            {
-                Console.WriteLine($"[GUILD] Joined: {g.Name} ({g.Id})");
-                return Task.CompletedTask;
-            };
-            _client.LeftGuild += g =>
-            {
-                Console.WriteLine($"[GUILD] Left: {g.Name} ({g.Id})");
-                return Task.CompletedTask;
-            };
+            // visibility for invites
+            _client.JoinedGuild += g => { Console.WriteLine($"[GUILD] Joined: {g.Name} ({g.Id})"); return Task.CompletedTask; };
+            _client.LeftGuild += g => { Console.WriteLine($"[GUILD] Left: {g.Name} ({g.Id})"); return Task.CompletedTask; };
 
-            // Single-run init after Ready
+            // single-run init
             _client.Ready += OnClientReadyOnce;
 
             await _client.LoginAsync(TokenType.Bot, _token);
@@ -113,7 +104,7 @@ namespace MyDiscordBot
             await Task.Delay(Timeout.Infinite);
         }
 
-        // One-time init after the gateway is ready
+        // one-time init after gateway is ready
         private async Task OnClientReadyOnce()
         {
             if (_didInit) return;
@@ -124,10 +115,11 @@ namespace MyDiscordBot
             }
             _client.Ready -= OnClientReadyOnce;
 
-            Console.WriteLine("[READY] Start Bot Setup");
+            Console.WriteLine("[READY] init start");
 
             EnsureDataDir();
             LoadSettings();
+            Console.WriteLine($"[settings] using file: {SettingsFile}");
             LoadLegacyCommandsOnce();
 
             foreach (var guild in _client.Guilds)
@@ -152,11 +144,10 @@ namespace MyDiscordBot
                 _ = RepeatBirthdayCheck();
             }
 
-            Console.WriteLine("[READY] End Bot Setup");
+            Console.WriteLine("[READY] init end");
         }
 
-        // ------------- Command pipeline with per-guild debug logging -------------
-
+        // ---------------- Command pipeline with per-guild debug logging ----------------
         private async Task HandleMessageAsync(SocketMessage message)
         {
             // Ignore bots/system/empty
@@ -242,14 +233,12 @@ namespace MyDiscordBot
             return $"guild={guildPart} chan={channelPart} user={userPart}";
         }
 
-        // ------------------- Settings (persisted to DATA_DIR) --------------------
-
+        // ------------------------- Settings persistence -------------------------
         private static string ResolveDataDir()
         {
-            // prefer explicit DATA_DIR, then /data (Render), then /var/data, then app dir
             var candidates = new[]
             {
-                Environment.GetEnvironmentVariable("DATA_DIR"),
+                Environment.GetEnvironmentVariable("DATA_DIR"), // e.g., /data
                 "/data",
                 "/var/data",
                 AppContext.BaseDirectory
@@ -258,14 +247,8 @@ namespace MyDiscordBot
             foreach (var p in candidates)
             {
                 if (string.IsNullOrWhiteSpace(p)) continue;
-                try
-                {
-                    Directory.CreateDirectory(p);
-                    return p;
-                }
-                catch { /* try next */ }
+                try { Directory.CreateDirectory(p); return p; } catch { }
             }
-
             return AppContext.BaseDirectory;
         }
 
@@ -294,16 +277,7 @@ namespace MyDiscordBot
 
                 // hydrate null collections
                 foreach (var kv in data)
-                    // Fix for CS0019 and CS8619
-                    // Replace the following line:
-                    // kv.Value.LogCategories ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                    // With the following code:
-                    if (kv.Value.LogCategories == null)
-                    {
-                        kv.Value.LogCategories = new List<string>();
-                    }
-                //kv.Value.LogCategories ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    kv.Value.LogCategories ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 _guildSettings = data;
                 Console.WriteLine($"[settings] loaded {_guildSettings.Count} guilds from {SettingsFile}");
@@ -337,7 +311,7 @@ namespace MyDiscordBot
         {
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
-            File.Move(tmp, path, true); // atomic replace on same filesystem
+            File.Move(tmp, path, true);
         }
 
         public static void SaveGuildSettings() => SaveSettings();
@@ -379,16 +353,14 @@ namespace MyDiscordBot
                 Console.WriteLine($"[{category}] {message}");
         }
 
-        // -------------------------- Birthdays loop -------------------------------
-
+        // ----------------------------- Birthdays loop ----------------------------
         private async Task RepeatBirthdayCheck()
         {
             while (true)
             {
                 var nextRunLocalMidnight = DateTime.Today.AddDays(1);
                 var delay = nextRunLocalMidnight - DateTime.Now;
-                if (delay < TimeSpan.FromSeconds(1))
-                    delay = TimeSpan.FromSeconds(1);
+                if (delay < TimeSpan.FromSeconds(1)) delay = TimeSpan.FromSeconds(1);
 
                 await Task.Delay(delay);
                 await CheckBirthdaysInternal();
@@ -457,34 +429,7 @@ namespace MyDiscordBot
             }
         }
 
-        // ----------------------------- Other events ------------------------------
-
-        private void LoadLegacyCommandsOnce()
-        {
-            if (_commandsLoaded) return;
-            _commandsLoaded = true;
-
-            var commandTypes = Assembly.GetExecutingAssembly()
-                .GetTypes()
-                .Where(t => typeof(ILegacyCommand).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface);
-
-            foreach (var type in commandTypes)
-            {
-                // skip anything explicitly marked obsolete
-                if (type.GetCustomAttribute<ObsoleteAttribute>() != null) continue;
-
-                if (Activator.CreateInstance(type) is ILegacyCommand instance)
-                {
-                    _legacyCommands[instance.Name.ToLowerInvariant()] = instance;
-                }
-            }
-
-            // optional: log what was loaded per guild under the Register category
-            foreach (var g in _client.Guilds)
-                foreach (var key in _legacyCommands.Keys)
-                    LogMessage(g.Id, $"Loaded legacy command: {_prefix}{key}", LogCategory.Register);
-        }
-
+        // ------------------------------ Other events -----------------------------
         private Task HandleUserJoinedAsync(SocketGuildUser user)
         {
             if (IsLogCategoryEnabled(user.Guild.Id, LogCategory.Register))
@@ -529,11 +474,33 @@ namespace MyDiscordBot
 
         private Task Log(LogMessage msg)
         {
-            // Optionally suppress REST rate-limit noise:
-            // if (msg.Source == "Rest") return Task.CompletedTask;
-
+            // if (msg.Source == "Rest") return Task.CompletedTask; // noisy
             Console.WriteLine("[LOG] " + msg.ToString());
             return Task.CompletedTask;
+        }
+
+        // --------------------------- Commands discovery --------------------------
+        private void LoadLegacyCommandsOnce()
+        {
+            if (_commandsLoaded) return;
+            _commandsLoaded = true;
+
+            var commandTypes = Assembly.GetExecutingAssembly()
+                .GetTypes()
+                .Where(t => typeof(ILegacyCommand).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface);
+
+            foreach (var type in commandTypes)
+            {
+                if (type.GetCustomAttribute<ObsoleteAttribute>() != null) continue;
+                if (Activator.CreateInstance(type) is ILegacyCommand instance)
+                {
+                    _legacyCommands[instance.Name.ToLowerInvariant()] = instance;
+                }
+            }
+
+            foreach (var g in _client.Guilds)
+                foreach (var key in _legacyCommands.Keys)
+                    LogMessage(g.Id, $"Loaded legacy command: {_prefix}{key}", LogCategory.Register);
         }
 
         public void Dispose()
