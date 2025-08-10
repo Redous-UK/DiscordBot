@@ -1,27 +1,28 @@
-﻿using Discord.WebSocket;
+﻿using Discord;
+using Discord.WebSocket;
 using System;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MyDiscordBot.Models;
+using MyDiscordBot.Services;
 
 namespace MyDiscordBot.Commands
 {
     public class RemindersCommand : ILegacyCommand
     {
         public string Name => "reminders";
-        public string Description => "Lists all your reminders.";
-        public string Category => "🔧 Utility";
+        public string Description => "List your reminders.";
+        public string Category => "Reminders";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
-            // Optional: only allow in guilds (keep if you want parity with your earlier version)
             if (message.Channel is not SocketGuildChannel)
             {
                 await message.Channel.SendMessageAsync("❌ This command must be used in a server.");
                 return;
             }
 
-            // Resolve the service at runtime to avoid constructor/initialization timing issues
             var reminderService = Program.BotInstance?.ReminderService;
             if (reminderService == null)
             {
@@ -40,25 +41,34 @@ namespace MyDiscordBot.Commands
             var sb = new StringBuilder();
             sb.AppendLine($"📋 **Reminders for {message.Author.Username}:**");
 
-            // Sort soonest first
-            foreach (var (entry, idx) in list.OrderBy(r => r.Time).Select((r, i) => (r, i + 1)))
+            // ✅ make element types explicit so deconstruction is unambiguous
+            foreach ((Reminder entry, int idx) in list
+                .OrderBy(r => r.Time)
+                .Select((r, i) => (r, i + 1)))
             {
                 var delta = entry.Time - DateTime.UtcNow;
                 var when = delta.TotalSeconds <= 0 ? "due now" : $"in {DescribeDelta(delta)}";
-                // You can add absolute time if you want: entry.Time.ToString("u")
-                sb.AppendLine($"`#{idx}` — **{entry.Message}** • {when}");
+                var recur = entry.RepeatMinutes is int m and > 0 ? $" • repeats every {DescribeDelta(TimeSpan.FromMinutes(m))}" : string.Empty;
+
+                // include ID to allow deletion by id if you add a !reminders remove <id> later
+                sb.AppendLine($"`#{idx}` — **{entry.Message}** • {when}{recur} • `ID:{entry.Id}`");
             }
 
             await message.Channel.SendMessageAsync(sb.ToString());
         }
 
-        private string DescribeDelta(TimeSpan span)
+        // Simple "2h 5m 10s" formatter (tweak to your taste)
+        private static string DescribeDelta(TimeSpan ts)
         {
-            if (span.TotalSeconds < 0) return "0s";
-            if (span.TotalMinutes < 1) return $"{span.Seconds}s";
-            if (span.TotalHours < 1) return $"{span.Minutes}m {span.Seconds}s";
-            if (span.TotalDays < 1) return $"{(int)span.TotalHours}h {span.Minutes}m";
-            return $"{(int)span.TotalDays}d {span.Hours}h";
+            if (ts < TimeSpan.Zero) ts = -ts;
+
+            if (ts.TotalDays >= 1)
+                return $"{(int)ts.TotalDays}d {(ts.Hours)}h";
+            if (ts.TotalHours >= 1)
+                return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+            if (ts.TotalMinutes >= 1)
+                return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+            return $"{ts.Seconds}s";
         }
     }
 }

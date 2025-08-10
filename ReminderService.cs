@@ -1,189 +1,157 @@
-﻿using Discord;
-using Discord.WebSocket;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text.Json.Serialization;
 
-public class ReminderService : IDisposable
+using MyDiscordBot.Models;
+
+namespace MyDiscordBot.Services
 {
-    private readonly DiscordSocketClient _client;
-    private readonly string _filePath = Path.Combine(AppContext.BaseDirectory, "reminders.json");
-    private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
-    private readonly object _sync = new();
-
-    // userId -> list of reminders
-    private Dictionary<ulong, List<ReminderEntry>> _reminders = new();
-
-    private readonly CancellationTokenSource _cts = new();
-    private static bool _loopStarted = false;
-    private Task _loopTask;
-
-    public ReminderService(DiscordSocketClient client)
+    public class ReminderService
     {
-        _client = client;
-        LoadReminders();
+        private readonly object _sync = new();
+        private readonly string _dbPath;
 
-        if (!_loopStarted)
+        // userId -> reminders
+        private Dictionary<ulong, List<Reminder>> _store = new();
+
+        private static readonly JsonSerializerOptions _jsonOptions = new()
         {
-            _loopStarted = true;
-            _loopTask = Task.Run(() => ReminderLoopAsync(_cts.Token));
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            // DateTime is handled as ISO-8601; no custom converters needed.
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
+        public ReminderService(string? dbPath = null)
+        {
+            _dbPath = dbPath ?? Path.Combine(AppContext.BaseDirectory, "reminders.json");
+            Load();
         }
-    }
 
-    public List<ReminderEntry> GetReminders(ulong userId)
-    {
-        lock (_sync)
+        public List<Reminder> GetReminders(ulong userId)
         {
-            if (_reminders.TryGetValue(userId, out var list))
-                return list.OrderBy(r => r.Time).Select(r => new ReminderEntry { Message = r.Message, Time = r.Time }).ToList();
-            return new List<ReminderEntry>();
-        }
-    }
-
-    public void AddReminder(ulong userId, ReminderEntry entry)
-    {
-        // normalize time to UTC just in case
-        if (entry.Time.Kind != DateTimeKind.Utc)
-            entry.Time = DateTime.SpecifyKind(entry.Time, DateTimeKind.Utc);
-
-        lock (_sync)
-        {
-            if (!_reminders.TryGetValue(userId, out var list))
-            {
-                list = new List<ReminderEntry>();
-                _reminders[userId] = list;
-            }
-            list.Add(entry);
-            SaveReminders();
-        }
-    }
-
-    // Optional helper if you add a remove command later
-    public bool RemoveReminderByIndex(ulong userId, int index)
-    {
-        lock (_sync)
-        {
-            if (_reminders.TryGetValue(userId, out var list) && index >= 0 && index < list.Count)
-            {
-                list.RemoveAt(index);
-                if (list.Count == 0) _reminders.Remove(userId);
-                SaveReminders();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private async Task ReminderLoopAsync(CancellationToken token)
-    {
-        // Check every 10 seconds; catch-up is automatic because we look for <= now
-        while (!token.IsCancellationRequested)
-        {
-            bool changed = false;
-            DateTime now = DateTime.UtcNow;
-
-            List<(ulong userId, ReminderEntry entry)> due;
             lock (_sync)
             {
-                due = _reminders
-                    .SelectMany(kvp => kvp.Value
-                        .Where(r => r.Time <= now)
-                        .Select(r => (kvp.Key, r)))
-                    .ToList();
-
-                foreach (var (userId, entry) in due)
-                {
-                    _reminders[userId].Remove(entry);
-                    if (_reminders[userId].Count == 0)
-                        _reminders.Remove(userId);
-                    changed = true;
-                }
+                if (_store.TryGetValue(userId, out var list))
+                    return list.OrderBy(r => r.Time).ToList();
+                return new List<Reminder>();
             }
+        }
 
-            // Send after unlocking
-            foreach (var (userId, entry) in due)
+        public Reminder AddReminder(ulong userId, DateTime timeUtc, string message, int? repeatMinutes = null)
+        {
+            if (timeUtc.Kind == DateTimeKind.Local)
+                timeUtc = timeUtc.ToUniversalTime();
+
+            var r = new Reminder
             {
-                try
-                {
-                    var user = _client.GetUser(userId);
-                    if (user != null)
-                        await user.SendMessageAsync($":alarm_clock: Reminder: {entry.Message}");
-                }
-                catch
-                {
-                    // swallow send errors to keep loop alive
-                }
-            }
+                Time = DateTime.SpecifyKind(timeUtc, DateTimeKind.Utc),
+                Message = message ?? string.Empty,
+                RepeatMinutes = (repeatMinutes is > 0) ? repeatMinutes : null
+            };
 
-            if (changed)
+            lock (_sync)
             {
-                // persist removals
-                SaveReminders();
+                if (!_store.TryGetValue(userId, out var list))
+                {
+                    list = new List<Reminder>();
+                    _store[userId] = list;
+                }
+
+                list.Add(r);
+                Save_NoLock();
             }
 
+            return r;
+        }
+
+        public bool RemoveReminder(ulong userId, Guid reminderId)
+        {
+            lock (_sync)
+            {
+                if (_store.TryGetValue(userId, out var list))
+                {
+                    var removed = list.RemoveAll(r => r.Id == reminderId) > 0;
+                    if (removed) Save_NoLock();
+                    return removed;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Returns reminders due at/Before now (UTC) for the user. If recurring, bumps the time forward.
+        /// Persists any changes.
+        /// </summary>
+        public List<Reminder> PopDueReminders(ulong userId, DateTime? nowUtc = null)
+        {
+            nowUtc ??= DateTime.UtcNow;
+            var due = new List<Reminder>();
+
+            lock (_sync)
+            {
+                if (!_store.TryGetValue(userId, out var list) || list.Count == 0)
+                    return due;
+
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var r = list[i];
+                    if (r.Time <= nowUtc.Value)
+                    {
+                        due.Add(r);
+
+                        if (r.RepeatMinutes is int minutes && minutes > 0)
+                        {
+                            // advance to next occurrence strictly after now
+                            var next = r.Time;
+                            var step = TimeSpan.FromMinutes(minutes);
+                            while (next <= nowUtc.Value) next = next.Add(step);
+                            r.Time = next;
+                        }
+                        else
+                        {
+                            // one-shot: remove after firing
+                            list.RemoveAt(i);
+                            i--;
+                        }
+                    }
+                }
+
+                Save_NoLock();
+            }
+
+            return due.OrderBy(r => r.Time).ToList();
+        }
+
+        private void Load()
+        {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                if (!File.Exists(_dbPath))
+                {
+                    _store = new Dictionary<ulong, List<Reminder>>();
+                    return;
+                }
+
+                var json = File.ReadAllText(_dbPath);
+                var data = JsonSerializer.Deserialize<Dictionary<ulong, List<Reminder>>>(json, _jsonOptions);
+                _store = data ?? new Dictionary<ulong, List<Reminder>>();
             }
-            catch (TaskCanceledException)
+            catch
             {
-                break;
+                // If the file is corrupt, fall back to empty to keep bot alive.
+                _store = new Dictionary<ulong, List<Reminder>>();
             }
         }
-    }
 
-    private void LoadReminders()
-    {
-        try
+        private void Save_NoLock()
         {
-            if (!File.Exists(_filePath))
-            {
-                _reminders = new Dictionary<ulong, List<ReminderEntry>>();
-                return;
-            }
-
-            var json = File.ReadAllText(_filePath);
-            var data = JsonSerializer.Deserialize<Dictionary<ulong, List<ReminderEntry>>>(json, _jsonOpts);
-            _reminders = data ?? new Dictionary<ulong, List<ReminderEntry>>();
-
-            // sanity: ensure UTC kind
-            foreach (var list in _reminders.Values)
-                foreach (var r in list)
-                    if (r.Time.Kind != DateTimeKind.Utc)
-                        r.Time = DateTime.SpecifyKind(r.Time, DateTimeKind.Utc);
+            var json = JsonSerializer.Serialize(_store, _jsonOptions);
+            Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
+            File.WriteAllText(_dbPath, json);
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ReminderService] Failed to load reminders: {ex.Message}");
-            _reminders = new Dictionary<ulong, List<ReminderEntry>>();
-        }
-    }
-
-    private void SaveReminders()
-    {
-        try
-        {
-            // Atomic write: write temp then replace
-            var tempPath = _filePath + ".tmp";
-            var json = JsonSerializer.Serialize(_reminders, _jsonOpts);
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(_filePath)) File.Delete(_filePath);
-            File.Move(tempPath, _filePath);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ReminderService] Failed to save reminders: {ex.Message}");
-        }
-    }
-
-    public void Dispose()
-    {
-        _cts.Cancel();
-        try { _loopTask?.Wait(2000); } catch { /* ignore */ }
-        _cts.Dispose();
     }
 }

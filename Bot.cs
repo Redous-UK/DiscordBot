@@ -12,6 +12,8 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MyDiscordBot.Models;
+using MyDiscordBot.Services;
 
 namespace MyDiscordBot
 {
@@ -84,10 +86,7 @@ namespace MyDiscordBot
             _client.ReactionAdded += HandleReactionAddedAsync;
 
             // Use a named handler so we can safely unsubscribe after first successful init
-            Task ReadyHandler()
-                => OnClientReadyOnce();
-
-            _client.Ready += ReadyHandler;
+            _client.Ready += OnClientReadyOnce;
 
             await _client.LoginAsync(TokenType.Bot, _token);
             await _client.StartAsync();
@@ -98,40 +97,25 @@ namespace MyDiscordBot
 
         private async Task OnClientReadyOnce()
         {
-            // If another Ready fired first, bail
+            // claim one-time init
             if (_didInit) return;
-
-            // Try to claim init
-            var claimed = false;
             lock (this)
             {
-                if (!_didInit)
-                {
-                    _didInit = true;
-                    claimed = true;
-                }
+                if (_didInit) return;
+                _didInit = true;
             }
-            if (!claimed) return;
+            _client.Ready -= OnClientReadyOnce; // ensure it never runs twice
 
-            // Now we’ve claimed initialization — immediately unsubscribe to be extra safe
-            _client.Ready -= OnClientReadyOnce;
-
-            Console.WriteLine("[READY] Bot is online and Ready event was triggered.");
+            Console.WriteLine("[READY] init start");
 
             LoadSettings();
 
-            // Create ReminderService ONCE (ReminderService itself should have an internal loop guard)
-            if (_reminderService == null)
-                _reminderService = new ReminderService(_client);
+            //if (_reminderService == null)
+            //    _reminderService = new ReminderService(_client); // see section 2
 
-            // Load commands ONCE globally (not per guild)
-            if (!_commandsLoaded)
-            {
-                LoadLegacyCommandsOnce();
-                _commandsLoaded = true;
-            }
+            // Load commands ONCE (not per guild)
+            LoadLegacyCommandsOnce();
 
-            // Per-guild nickname + hello log
             foreach (var guild in _client.Guilds)
             {
                 var settings = GetSettings(guild.Id);
@@ -140,49 +124,43 @@ namespace MyDiscordBot
                     var botUser = guild.GetUser(_client.CurrentUser.Id);
                     if (botUser != null)
                     {
-                        try { await botUser.ModifyAsync(p => p.Nickname = settings.Nickname); }
-                        catch { /* ignore perms errors */ }
+                        try { await botUser.ModifyAsync(p => p.Nickname = settings.Nickname); } catch { }
                     }
                 }
 
                 LogMessage(guild.Id, $"Connected to guild: {guild.Name} ({guild.Id})", LogCategory.Log);
             }
 
-            // Start birthday loop ONCE
             if (!_birthdayLoopStarted)
             {
                 _birthdayLoopStarted = true;
                 _ = RepeatBirthdayCheck();
             }
 
-            // One immediate run (gated + deduped)
-            await CheckBirthdays();
+            await CheckBirthdays(); // deduped below
+
+            Console.WriteLine("[READY] init end");
         }
 
         private void LoadLegacyCommandsOnce()
         {
+            if (_commandsLoaded) return;
+            _commandsLoaded = true;
+
             var commandTypes = Assembly.GetExecutingAssembly()
                 .GetTypes()
-                .Where(t => typeof(ILegacyCommand).IsAssignableFrom(t)
-                            && !t.IsAbstract && !t.IsInterface)
-                .ToList();
+                .Where(t => typeof(ILegacyCommand).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface);
 
             foreach (var type in commandTypes)
             {
-                if (type.GetCustomAttribute<ObsoleteAttribute>() != null)
-                    continue;
-
+                if (type.GetCustomAttribute<ObsoleteAttribute>() != null) continue;
                 var instance = (ILegacyCommand)Activator.CreateInstance(type);
-                // last write wins, but names are case-insensitive via comparer
-                _legacyCommands[instance.Name] = instance;
+                _legacyCommands[instance.Name.ToLower()] = instance;
             }
 
-            // optional log: per guild
             foreach (var g in _client.Guilds)
-            {
                 foreach (var kvp in _legacyCommands)
                     LogMessage(g.Id, $"Loaded legacy command: {_prefix}{kvp.Key}", LogCategory.Register);
-            }
         }
 
         private void LoadSettings()
@@ -297,72 +275,41 @@ namespace MyDiscordBot
 
         private async Task CheckBirthdays()
         {
-            await _birthdayCheckGate.WaitAsync();
-            try
+            ResetBirthdaySentIfNewDay();
+
+            var today = DateTime.Today;
+            var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
+            if (!File.Exists(birthdayPath))
             {
-                ResetBirthdaySentIfNewDay();
-
-                var today = DateTime.Today;
-                var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
-
-                if (!File.Exists(birthdayPath))
-                {
-                    Console.WriteLine("[BirthdayCheck] No birthdays.json file found. Creating a new one...");
-                    var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
-                    var json = JsonSerializer.Serialize(emptyData, new JsonSerializerOptions { WriteIndented = true });
-                    File.WriteAllText(birthdayPath, json);
-                    return;
-                }
-
-                var birthdayData = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath));
-                if (birthdayData == null || birthdayData.Count == 0)
-                    return;
-
-                foreach (var (key, entry) in birthdayData)
-                {
-                    var parts = key.Split('-');
-                    if (parts.Length != 2
-                        || !ulong.TryParse(parts[0], out var guildId)
-                        || !ulong.TryParse(parts[1], out var userId))
-                        continue;
-
-                    var guild = _client.GetGuild(guildId);
-                    if (guild == null) continue;
-
-                    if (entry.Date.Month == today.Month && entry.Date.Day == today.Day)
-                    {
-                        var user = guild.GetUser(userId);
-                        var channel = guild.TextChannels.FirstOrDefault(c =>
-                            guild.CurrentUser.GetPermissions(c).SendMessages &&
-                            (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
-
-                        if (channel != null && user != null)
-                        {
-                            var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
-                            if (_birthdaySentToday.Contains(sentKey))
-                            {
-                                LogMessage(guildId, $"[BirthdayCheck] Skipping duplicate for {entry.Username}", LogCategory.BirthdayCheck);
-                                continue;
-                            }
-
-                            LogMessage(guildId, $"🎉 Birthday match for {entry.Username}", LogCategory.BirthdayCheck);
-                            await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
-                            _birthdaySentToday.Add(sentKey);
-                        }
-                        else
-                        {
-                            LogMessage(guildId, $"No accessible birthday channel for {entry.Username}", LogCategory.BirthdayCheck);
-                        }
-                    }
-                    else
-                    {
-                        LogMessage(guildId, $"❌ No birthday match today for {entry.Username} ({entry.Date:MM/dd})", LogCategory.BirthdayCheck);
-                    }
-                }
+                var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
+                File.WriteAllText(birthdayPath, JsonSerializer.Serialize(emptyData, new JsonSerializerOptions { WriteIndented = true }));
+                return;
             }
-            finally
+
+            var data = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath));
+            if (data == null || data.Count == 0) return;
+
+            foreach (var (key, entry) in data)
             {
-                _birthdayCheckGate.Release();
+                var parts = key.Split('-');
+                if (parts.Length != 2 || !ulong.TryParse(parts[0], out var guildId) || !ulong.TryParse(parts[1], out var userId))
+                    continue;
+
+                if (entry.Date.Month != today.Month || entry.Date.Day != today.Day) continue;
+
+                var guild = _client.GetGuild(guildId);
+                var user = guild?.GetUser(userId);
+                var channel = guild?.TextChannels.FirstOrDefault(c =>
+                    guild.CurrentUser.GetPermissions(c).SendMessages &&
+                    (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
+
+                if (guild == null || user == null || channel == null) continue;
+
+                var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
+                if (_birthdaySentToday.Contains(sentKey)) continue;
+
+                await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
+                _birthdaySentToday.Add(sentKey);
             }
         }
 
@@ -447,10 +394,10 @@ namespace MyDiscordBot
                 Console.WriteLine($"[{category}] {message}");
         }
 
-        public void Shutdown()
+        /*public void Shutdown()
         {
             _reminderService?.Dispose();
             // add more disposables if needed
-        }
+        }*/
     }
 }
