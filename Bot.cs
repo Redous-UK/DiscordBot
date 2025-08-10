@@ -354,6 +354,58 @@ namespace MyDiscordBot
         }
 
         // ----------------------------- Birthdays loop ----------------------------
+
+        private async Task CheckBirthdays(Dictionary<string, BirthdayCommand.BirthdayEntry>? birthdayData)
+        {
+            var today = DateTime.Today;
+            var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
+            if (!File.Exists(birthdayPath))
+            {
+                Console.WriteLine("[BirthdayCheck] No birthdays.json file found.");
+                return;
+            }
+
+            var birthdayEntries = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath));
+
+            if (birthdayEntries == null)
+            {
+                Console.WriteLine("[BirthdayCheck] No valid birthday entries found.");
+                return;
+            }
+
+            foreach (var (key, entry) in birthdayEntries)
+            {
+                var parts = key.Split('-');
+                if (parts.Length != 2 || !ulong.TryParse(parts[0], out var guildId) || !ulong.TryParse(parts[1], out var userId))
+                    continue;
+
+                var guild = _client.GetGuild(guildId);
+                if (guild == null) continue;
+
+                if (entry.Date.Month == today.Month && entry.Date.Day == today.Day)
+                {
+                    var user = guild.GetUser(userId);
+                    var channel = guild.TextChannels.FirstOrDefault(c =>
+                        guild.CurrentUser.GetPermissions(c).SendMessages &&
+                        (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
+
+                    if (channel != null)
+                    {
+                        LogMessage(guildId, $"🎉 Birthday match for {entry.Username}", LogCategory.BirthdayCheck);
+                        await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
+                    }
+                    else
+                    {
+                        LogMessage(guildId, $"No accessible birthday channel for {entry.Username}", LogCategory.BirthdayCheck);
+                    }
+                }
+                else
+                {
+                    LogMessage(guildId, $"❌ No birthday match today for {entry.Username} ({entry.Date:MM/dd})", LogCategory.BirthdayCheck);
+                }
+            }
+        }
+
         private async Task RepeatBirthdayCheck()
         {
             while (true)
