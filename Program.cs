@@ -23,6 +23,9 @@ namespace MyDiscordBot
 
         private static async Task<bool> TryAcquireLeaderAsync(TimeSpan ttl)
         {
+            var url = Environment.GetEnvironmentVariable("REDIS_URL");
+            Console.WriteLine($"[leader] REDIS_URL present? {!string.IsNullOrWhiteSpace(url)} len={url?.Length ?? 0}");
+
             var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
             if (string.IsNullOrWhiteSpace(redisUrl))
             {
