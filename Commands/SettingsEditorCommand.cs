@@ -31,7 +31,7 @@ namespace MyDiscordBot.Commands
                 sb.AppendLine($"📋 **Settings for {guildChannel.Guild.Name}**:");
                 sb.AppendLine($"- **Nickname**: {settings.Nickname ?? "Not set"}");
                 sb.AppendLine($"- **Debug Mode**: {(settings.DebugEnabled ? "✅ Enabled" : "❌ Disabled")}");
-                sb.AppendLine($"- **Log Categories**: {(settings.LogCategories?.Any() == true ? string.Join(", ", settings.LogCategories) : "None")}");
+                sb.AppendLine($"- **Log Categories**: {((settings.LogCategories?.Any()) == true ? string.Join(", ", settings.LogCategories) : "None")}");
                 sb.AppendLine($"- **Birthday Channel**: {(settings.BirthdayChannelId > 0 ? $"<#{settings.BirthdayChannelId}>" : "Not set")}\n");
 
                 sb.AppendLine("_Example usage: !settings set debug true_");
@@ -148,7 +148,7 @@ namespace MyDiscordBot.Commands
                     return;
             }
 
-            Bot.BotInstance.SaveGuildSettings();
+            Bot.SaveGuildSettings();
         }
     }
 }

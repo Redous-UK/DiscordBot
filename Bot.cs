@@ -17,7 +17,7 @@ using MyDiscordBot.Services;
 
 namespace MyDiscordBot
 {
-    public class Bot : IDisposable
+    public class Bot(ReminderService reminderService) : IDisposable
     {
         // --- Lifecycle/guards ---
         private volatile bool _didInit = false;
@@ -28,13 +28,13 @@ namespace MyDiscordBot
         private readonly SemaphoreSlim _birthdayCheckGate = new(1, 1);
 
         // dedupe birthday posts per day
-        private readonly HashSet<string> _birthdaySentToday = new();
+        private readonly HashSet<string> _birthdaySentToday = [];
         private DateTime _lastBirthdayResetDate = DateTime.MinValue;
 
         // --- Services ---
         //private ReminderService _reminderService;
         //public ReminderService ReminderService => _reminderService;
-        public ReminderService ReminderService { get; }
+        public ReminderService ReminderService { get; } = reminderService;// init client, register handlers, etc.
 
         // --- Discord client & config ---
         public DiscordSocketClient _client = null!;
@@ -43,12 +43,12 @@ namespace MyDiscordBot
 
         // --- Commands & settings ---
         private readonly Dictionary<string, ILegacyCommand> _legacyCommands = new(StringComparer.OrdinalIgnoreCase);
-        private static Dictionary<ulong, GuildSettings> _guildSettings = new();
+        private static Dictionary<ulong, GuildSettings> _guildSettings = [];
         private const string SettingsFile = "guild-settings.json";
 
         public List<ILegacyCommand> GetAllLegacyCommands()
         {
-            return _legacyCommands.Values.ToList();
+            return [.. _legacyCommands.Values];
         }
 
         public static Bot BotInstance { get; private set; } = null!;
@@ -96,25 +96,20 @@ namespace MyDiscordBot
             await Task.Delay(Timeout.Infinite);
         }
 
-        private async Task OnClientReadyOnce()
+        // Update the OnClientReadyOnce method to match the expected delegate signature for the Ready event.
+        private async Task<Task> OnClientReadyOnce()
         {
-            // claim one-time init
-            if (_didInit) return;
+            if (_didInit) return Task.CompletedTask;
             lock (this)
             {
-                if (_didInit) return;
+                if (_didInit) return Task.CompletedTask;
                 _didInit = true;
             }
-            _client.Ready -= OnClientReadyOnce; // ensure it never runs twice
+            _client.Ready -= OnClientReadyOnce;
 
             Console.WriteLine("[READY] init start");
 
             LoadSettings();
-
-            //if (_reminderService == null)
-            //    _reminderService = new ReminderService(_client); // see section 2
-
-            // Load commands ONCE (not per guild)
             LoadLegacyCommandsOnce();
 
             foreach (var guild in _client.Guilds)
@@ -138,9 +133,99 @@ namespace MyDiscordBot
                 _ = RepeatBirthdayCheck();
             }
 
-            await CheckBirthdays(); // deduped below
+            Console.WriteLine("[READY] init end");
+            return Task.CompletedTask;
+        }
+
+        // Rename one of the duplicate methods to resolve the conflict
+        private async Task CheckBirthdaysInternal()
+        {
+            ResetBirthdaySentIfNewDay();
+
+            var today = DateTime.Today;
+            var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
+            if (!File.Exists(birthdayPath))
+            {
+                var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
+                File.WriteAllText(birthdayPath, JsonSerializer.Serialize(emptyData, CachedJsonSerializerOptions));
+                return;
+            }
+
+            var data = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath), CachedJsonSerializerOptions);
+            if (data == null || data.Count == 0) return;
+
+            foreach (var (key, entry) in data)
+            {
+                var parts = key.Split('-');
+                if (parts.Length != 2 || !ulong.TryParse(parts[0], out var guildId) || !ulong.TryParse(parts[1], out var userId))
+                    continue;
+
+                if (entry.Date.Month != today.Month || entry.Date.Day != today.Day) continue;
+
+                var guild = _client.GetGuild(guildId);
+                var user = guild?.GetUser(userId);
+                var channel = guild?.TextChannels.FirstOrDefault(c =>
+                    guild.CurrentUser.GetPermissions(c).SendMessages &&
+                    (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
+
+                if (guild == null || user == null || channel == null) continue;
+
+                var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
+                if (_birthdaySentToday.Contains(sentKey)) continue;
+
+                await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
+                _birthdaySentToday.Add(sentKey);
+            }
+        }
+
+        private async Task<object> GetBirthdayCheckResultAsync()
+        {
+            await CheckBirthdaysInternal();
+            return Task.CompletedTask;
+        }
+
+        // Fix the ambiguous call issue by renaming one of the duplicate methods.
+        // The error occurs because there are two methods named `OnClientReadyOnce` in the class.
+        // Rename one of the methods to resolve the ambiguity.
+
+        private async Task<Task> OnClientReadyOnceRenamed()
+        {
+            if (_didInit) return Task.CompletedTask;
+            lock (this)
+            {
+                if (_didInit) return Task.CompletedTask;
+                _didInit = true;
+            }
+            _client.Ready -= OnClientReadyOnce;
+
+            Console.WriteLine("[READY] init start");
+
+            LoadSettings();
+            LoadLegacyCommandsOnce();
+
+            foreach (var guild in _client.Guilds)
+            {
+                var settings = GetSettings(guild.Id);
+                if (!string.IsNullOrEmpty(settings.Nickname))
+                {
+                    var botUser = guild.GetUser(_client.CurrentUser.Id);
+                    if (botUser != null)
+                    {
+                        try { await botUser.ModifyAsync(p => p.Nickname = settings.Nickname); } catch { }
+                    }
+                }
+
+                LogMessage(guild.Id, $"Connected to guild: {guild.Name} ({guild.Id})", LogCategory.Log);
+            }
+
+            if (!_birthdayLoopStarted)
+            {
+                _birthdayLoopStarted = true;
+                _ = RepeatBirthdayCheck();
+            }
 
             Console.WriteLine("[READY] init end");
+            return Task.CompletedTask;
         }
 
         private void LoadLegacyCommandsOnce()
@@ -164,40 +249,78 @@ namespace MyDiscordBot
                     LogMessage(g.Id, $"Loaded legacy command: {_prefix}{kvp.Key}", LogCategory.Register);
         }
 
-        private void LoadSettings()
+        private static void LoadSettings()
         {
             if (File.Exists(SettingsFile))
             {
                 try
                 {
                     _guildSettings = JsonSerializer.Deserialize<Dictionary<ulong, GuildSettings>>(File.ReadAllText(SettingsFile))
-                                     ?? new Dictionary<ulong, GuildSettings>();
+                                     ?? [];
                 }
                 catch
                 {
-                    _guildSettings = new Dictionary<ulong, GuildSettings>();
+                    _guildSettings = [];
                 }
             }
             else
             {
-                _guildSettings = new Dictionary<ulong, GuildSettings>();
+                _guildSettings = [];
             }
         }
 
+        // Add a static readonly field to cache the JsonSerializerOptions instance
+        private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new JsonSerializerOptions { WriteIndented = true };
 
-        public Bot(ReminderService reminderService)
+        // Update the SaveSettings method to use the cached instance
+        private static void SaveSettings()
         {
-            ReminderService = reminderService;
-            // init client, register handlers, etc.
-        }
-
-        private void SaveSettings()
-        {
-            var json = JsonSerializer.Serialize(_guildSettings, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(_guildSettings, CachedJsonSerializerOptions);
             File.WriteAllText(SettingsFile, json);
         }
 
-        public void SaveGuildSettings()
+        // Update the CheckBirthdays method to use the cached instance
+        private async Task CheckBirthdays()
+        {
+            ResetBirthdaySentIfNewDay();
+
+            var today = DateTime.Today;
+            var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
+            if (!File.Exists(birthdayPath))
+            {
+                var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
+                File.WriteAllText(birthdayPath, JsonSerializer.Serialize(emptyData, CachedJsonSerializerOptions));
+                return;
+            }
+
+            var data = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath), CachedJsonSerializerOptions);
+            if (data == null || data.Count == 0) return;
+
+            foreach (var (key, entry) in data)
+            {
+                var parts = key.Split('-');
+                if (parts.Length != 2 || !ulong.TryParse(parts[0], out var guildId) || !ulong.TryParse(parts[1], out var userId))
+                    continue;
+
+                if (entry.Date.Month != today.Month || entry.Date.Day != today.Day) continue;
+
+                var guild = _client.GetGuild(guildId);
+                var user = guild?.GetUser(userId);
+                var channel = guild?.TextChannels.FirstOrDefault(c =>
+                    guild.CurrentUser.GetPermissions(c).SendMessages &&
+                    (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
+
+                if (guild == null || user == null || channel == null) continue;
+
+                var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
+                if (_birthdaySentToday.Contains(sentKey)) continue;
+
+                await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
+                _birthdaySentToday.Add(sentKey);
+            }
+        }
+
+        public static void SaveGuildSettings()
         {
             SaveSettings();
         }
@@ -241,7 +364,7 @@ namespace MyDiscordBot
             }
 
             var args = string.IsNullOrWhiteSpace(argRest)
-                ? Array.Empty<string>()
+                ? []
                 : argRest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
             if (_legacyCommands.TryGetValue(commandName, out var command))
@@ -257,6 +380,7 @@ namespace MyDiscordBot
             }
         }
 
+        // Update the ambiguous call to explicitly use the renamed method
         private async Task RepeatBirthdayCheck()
         {
             while (true)
@@ -267,7 +391,7 @@ namespace MyDiscordBot
                     delay = TimeSpan.FromSeconds(1);
 
                 await Task.Delay(delay);
-                await CheckBirthdays();
+                await CheckBirthdaysInternal(); // Explicitly call the renamed method
             }
         }
 
@@ -278,46 +402,6 @@ namespace MyDiscordBot
             {
                 _birthdaySentToday.Clear();
                 _lastBirthdayResetDate = today;
-            }
-        }
-
-        private async Task CheckBirthdays()
-        {
-            ResetBirthdaySentIfNewDay();
-
-            var today = DateTime.Today;
-            var birthdayPath = Path.Combine(AppContext.BaseDirectory, "birthdays.json");
-            if (!File.Exists(birthdayPath))
-            {
-                var emptyData = new Dictionary<string, BirthdayCommand.BirthdayEntry>();
-                File.WriteAllText(birthdayPath, JsonSerializer.Serialize(emptyData, new JsonSerializerOptions { WriteIndented = true }));
-                return;
-            }
-
-            var data = JsonSerializer.Deserialize<Dictionary<string, BirthdayCommand.BirthdayEntry>>(File.ReadAllText(birthdayPath));
-            if (data == null || data.Count == 0) return;
-
-            foreach (var (key, entry) in data)
-            {
-                var parts = key.Split('-');
-                if (parts.Length != 2 || !ulong.TryParse(parts[0], out var guildId) || !ulong.TryParse(parts[1], out var userId))
-                    continue;
-
-                if (entry.Date.Month != today.Month || entry.Date.Day != today.Day) continue;
-
-                var guild = _client.GetGuild(guildId);
-                var user = guild?.GetUser(userId);
-                var channel = guild?.TextChannels.FirstOrDefault(c =>
-                    guild.CurrentUser.GetPermissions(c).SendMessages &&
-                    (GetSettings(guildId).BirthdayChannelId == 0 || c.Id == GetSettings(guildId).BirthdayChannelId));
-
-                if (guild == null || user == null || channel == null) continue;
-
-                var sentKey = $"{guildId}:{userId}:{DateTime.UtcNow:yyyy-MM-dd}";
-                if (_birthdaySentToday.Contains(sentKey)) continue;
-
-                await channel.SendMessageAsync($"🎉 Happy Birthday {user.Mention}!");
-                _birthdaySentToday.Add(sentKey);
             }
         }
 
@@ -381,7 +465,7 @@ namespace MyDiscordBot
         public static void SetDebugMode(ulong guildId, bool enabled)
         {
             GetSettings(guildId).DebugEnabled = enabled;
-            BotInstance.SaveSettings();
+            SaveSettings();
         }
 
         public static bool ToggleLogCategory(ulong guildId, LogCategory category)
@@ -392,11 +476,11 @@ namespace MyDiscordBot
             else
                 settings.LogCategories.Add(category.ToString());
 
-            BotInstance.SaveSettings();
+            SaveSettings();
             return settings.LogCategories.Contains(category.ToString());
         }
 
-        private void LogMessage(ulong guildId, string message, LogCategory category = LogCategory.Other)
+        private static void LogMessage(ulong guildId, string message, LogCategory category = LogCategory.Other)
         {
             if (IsLogCategoryEnabled(guildId, category))
                 Console.WriteLine($"[{category}] {message}");
@@ -405,8 +489,7 @@ namespace MyDiscordBot
         public void Dispose()
         {
             //_reminderService?.Dispose();
-            ReminderService?.Dispose();
-            // add more disposables if needed
+            ReminderService?.Dispose();// add more disposables if needed
         }
     }
 }
