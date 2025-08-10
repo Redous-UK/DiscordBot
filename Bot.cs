@@ -124,7 +124,7 @@ namespace MyDiscordBot
             }
             _client.Ready -= OnClientReadyOnce;
 
-            Console.WriteLine("[READY] init start");
+            Console.WriteLine("[READY] Start Bot Setup");
 
             EnsureDataDir();
             LoadSettings();
@@ -152,7 +152,7 @@ namespace MyDiscordBot
                 _ = RepeatBirthdayCheck();
             }
 
-            Console.WriteLine("[READY] init end");
+            Console.WriteLine("[READY] End Bot Setup");
         }
 
         // ------------- Command pipeline with per-guild debug logging -------------
