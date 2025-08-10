@@ -8,7 +8,7 @@ namespace MyDiscordBot.Commands
     {
         public string Name => "reminders";
         public string Description => "List your reminders.";
-        public string Category => "Reminders";
+        public string Category => "🔔 Reminders & Notifications";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
