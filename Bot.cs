@@ -144,6 +144,12 @@ namespace MyDiscordBot
             return Task.CompletedTask;
         }
 
+        private static bool DebugOn(SocketMessage msg)
+        {
+            var guildId = (msg.Channel as SocketGuildChannel)?.Guild.Id;
+            return guildId.HasValue && GetDebugMode(guildId.Value);
+        }
+
         private static string FormatContext(SocketMessage msg)
         {
             var guild = (msg.Channel as SocketGuildChannel)?.Guild;
@@ -417,16 +423,17 @@ namespace MyDiscordBot
                 argRest = content.Substring(firstSpace + 1);
             }
 
-            var ctx = FormatContext(message);
-            var sw = Stopwatch.StartNew();
+            bool debug = DebugOn(message);
+            var ctx = debug ? FormatContext(message) : string.Empty;
+            var sw = debug ? Stopwatch.StartNew() : null;
 
             if (!_legacyCommands.TryGetValue(commandName, out var command))
             {
-                Console.WriteLine($"[CMD] unknown '{commandName}' args=\"{argRest}\" | {ctx}");
+                if (debug) Console.WriteLine($"[CMD] unknown '{commandName}' args=\"{argRest}\" | {ctx}");
                 return;
             }
 
-            Console.WriteLine($"[CMD] start '{commandName}' args=\"{argRest}\" | {ctx}");
+            if (debug) Console.WriteLine($"[CMD] start   '{commandName}' args=\"{argRest}\" | {ctx}");
             try
             {
                 var args = string.IsNullOrWhiteSpace(argRest)
@@ -435,14 +442,19 @@ namespace MyDiscordBot
 
                 await command.ExecuteAsync(message, args);
 
-                sw.Stop();
-                Console.WriteLine($"[CMD] ok    '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}");
+                if (debug && sw is not null)
+                {
+                    sw.Stop();
+                    Console.WriteLine($"[CMD] ok      '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}");
+                }
             }
             catch (Exception ex)
             {
-                sw.Stop();
-                Console.WriteLine($"[CMD] fail  '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}\n{ex}");
-                // Optional: rethrow or swallow; you already catch at caller
+                if (debug && sw is not null)
+                {
+                    sw.Stop();
+                    Console.WriteLine($"[CMD] fail    '{commandName}' {sw.ElapsedMilliseconds}ms | {ctx}\n{ex}");
+                }
             }
         }
 
