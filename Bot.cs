@@ -37,8 +37,8 @@ namespace MyDiscordBot
         public ReminderService ReminderService { get; }
 
         // --- Discord client & config ---
-        public DiscordSocketClient _client;
-        private string _token;
+        public DiscordSocketClient _client = null!;
+        private string _token = null!;
         private string _prefix = "!";
 
         // --- Commands & settings ---

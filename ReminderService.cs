@@ -6,8 +6,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using MyDiscordBot.Models;
-
 namespace MyDiscordBot.Services
 {
     public class ReminderService : IDisposable

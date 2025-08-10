@@ -27,7 +27,7 @@ namespace MyDiscordBot.Commands
         public class BirthdayEntry
         {
             public DateTime Date { get; set; }
-            public string Username { get; set; }
+            public string Username { get; set; } = string.Empty;
         }
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)

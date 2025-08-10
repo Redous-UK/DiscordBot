@@ -4,14 +4,13 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using StackExchange.Redis;
 
 namespace MyDiscordBot
 {
     public static class Program
     {
-        public static Bot BotInstance { get; private set; }
-        public static ReminderService ReminderService { get; private set; }  // ← add this
+        public static Bot BotInstance { get; private set; } = null!;
+        public static ReminderService ReminderService { get; private set; } = null!;
 
         private static ConnectionMultiplexer? _mux;
         private static IDatabase? _db;

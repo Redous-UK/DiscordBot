@@ -1,11 +1,6 @@
-﻿using Discord;
-using Discord.WebSocket;
-using System;
-using System.Linq;
+﻿using Discord.WebSocket;
 using System.Text;
-using System.Threading.Tasks;
 using MyDiscordBot.Models;
-using MyDiscordBot.Services;
 
 namespace MyDiscordBot.Commands
 {
