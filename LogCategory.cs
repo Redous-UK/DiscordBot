@@ -9,6 +9,7 @@
         Reaction,
         Voice,
         JoinLeave,
+        Commands,
         Other
     }
 }

@@ -107,7 +107,7 @@ namespace MyDiscordBot
             }
             _client.Ready -= OnClientReadyOnce;
 
-            Console.WriteLine("[READY] init start");
+            Console.WriteLine("[READY] Starting Bot Setup");
 
             LoadSettings();
             LoadLegacyCommandsOnce();
@@ -140,7 +140,7 @@ namespace MyDiscordBot
                 _ = RepeatBirthdayCheck();
             }
 
-            Console.WriteLine("[READY] init end");
+            Console.WriteLine("[READY] Ending Bot Setup");
             return Task.CompletedTask;
         }
 
