@@ -253,7 +253,7 @@ namespace MyDiscordBot
         // The error occurs because there are two methods named `OnClientReadyOnce` in the class.
         // Rename one of the methods to resolve the ambiguity.
 
-        private async Task<Task> OnClientReadyOnceRenamed()
+        /*private async Task<Task> OnClientReadyOnceRenamed()
         {
             if (_didInit) return Task.CompletedTask;
             lock (this)
@@ -291,7 +291,7 @@ namespace MyDiscordBot
 
             Console.WriteLine("[READY] init end");
             return Task.CompletedTask;
-        }
+        }*/
 
         private void LoadLegacyCommandsOnce()
         {
