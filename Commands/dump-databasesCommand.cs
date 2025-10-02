@@ -13,11 +13,12 @@ namespace YourBot.Commands
     public class DumpDatabasesCommand : ILegacyCommand
     {
         public string Name => "dump-databases";
-        public string Description => "Admin only. Dumps the bot's JSON databases. Usage: !dump-databases [raw] [files...]";
+        public string Description => "Admin only. Dumps the bot's JSON databases. Usage: !dump-databases [raw|ls|where] [files...]";
+
         public string Category => "🛠️ Moderation";
 
-        // Add any new database files here if you create more later.
-        private static readonly string[] DefaultDbFiles = new[]
+        // Add/trim file names to match your project
+        private static readonly string[] DefaultDbFiles =
         {
             "reminders.json",
             "birthdays.json",
@@ -25,7 +26,6 @@ namespace YourBot.Commands
             "users.json"
         };
 
-        // Discord message hard limit is 2000; leave room for code fences & labels.
         private const int MaxChunk = 1900;
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
@@ -43,117 +43,247 @@ namespace YourBot.Commands
                 return;
             }
 
-            // Parse args
-            bool rawMode = args.Any(a => string.Equals(a, "raw", StringComparison.OrdinalIgnoreCase));
-            var requestedFiles = args.Where(a => !string.Equals(a, "raw", StringComparison.OrdinalIgnoreCase))
-                                     .ToArray();
+            var mode = args.FirstOrDefault()?.ToLowerInvariant();
+            var rest = args.Skip(1).ToArray();
 
-            string[] files = (requestedFiles.Length > 0 ? requestedFiles : DefaultDbFiles)
+            switch (mode)
+            {
+                case "ls":
+                    await ListFiles(channel);
+                    return;
+                case "where":
+                    await ShowWhere(channel);
+                    return;
+                case "raw":
+                    await Dump(rawMode: true, channel, rest);
+                    return;
+                default:
+                    // No subcommand: treat entire args as filenames (or default set)
+                    await Dump(rawMode: false, channel, args);
+                    return;
+            }
+        }
+
+        private static async Task Dump(bool rawMode, SocketTextChannel channel, string[] fileArgs)
+        {
+            var requested = fileArgs?.Where(a => !string.IsNullOrWhiteSpace(a)).ToArray() ?? Array.Empty<string>();
+            string[] files = (requested.Length > 0 ? requested : DefaultDbFiles)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
             if (files.Length == 0)
             {
-                await message.Channel.SendMessageAsync("No files specified.");
+                await channel.SendMessageAsync("No files specified.");
+                return;
+            }
+
+            var candidates = GetCandidateDirs();
+            var resolved = ResolveExistingFiles(files, candidates);
+
+            if (resolved.Count == 0)
+            {
+                await channel.SendMessageAsync(
+                    "❓ I couldn’t find any of the requested files.\n" +
+                    "Try `!dump-databases where` to see the directories I’m checking, " +
+                    "and `!dump-databases ls` to list what’s actually there.");
                 return;
             }
 
             if (rawMode)
             {
-                await SendRawFiles(channel, files);
+                await SendRawFiles(channel, resolved);
             }
             else
             {
-                await SendReadableEmbeds(channel, files);
-            }
-        }
-
-        private static async Task SendRawFiles(SocketTextChannel channel, IEnumerable<string> files)
-        {
-            var missing = new List<string>();
-            var sentAny = false;
-
-            foreach (var file in files)
-            {
-                if (!File.Exists(file))
-                {
-                    missing.Add(file);
-                    continue;
-                }
-
-                try
-                {
-                    // Discord supports multiple attachments, but we’ll send one-by-one for simple error reporting.
-                    await channel.SendFileAsync(file, $"📦 `{file}`");
-                    sentAny = true;
-                }
-                catch (Exception ex)
-                {
-                    await channel.SendMessageAsync($"⚠️ Could not send `{file}`: {ex.Message}");
-                }
+                await SendReadableEmbeds(channel, resolved);
             }
 
+            // Mention any that were missing
+            var missing = files.Where(f => !resolved.Keys.Any(k => Path.GetFileName(k).Equals(f, StringComparison.OrdinalIgnoreCase))).ToList();
             if (missing.Count > 0)
             {
                 await channel.SendMessageAsync("ℹ️ Not found: " + string.Join(", ", missing.Select(m => $"`{m}`")));
             }
+        }
 
-            if (!sentAny && missing.Count > 0)
+        private static async Task ListFiles(SocketTextChannel channel)
+        {
+            var sb = new StringBuilder();
+            var dirs = GetCandidateDirs().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var d in dirs)
             {
-                await channel.SendMessageAsync("No files were sent. Double-check the filenames or working directory.");
+                try
+                {
+                    if (Directory.Exists(d))
+                    {
+                        var files = Directory.EnumerateFiles(d, "*.json", SearchOption.TopDirectoryOnly)
+                                             .Select(Path.GetFileName)
+                                             .OrderBy(n => n)
+                                             .ToList();
+                        sb.AppendLine($"**{d}**");
+                        if (files.Count == 0) sb.AppendLine("_(no .json files)_");
+                        else sb.AppendLine(string.Join(", ", files.Select(f => $"`{f}`")));
+                        sb.AppendLine();
+                    }
+                }
+                catch { /* ignore directory errors */ }
+            }
+
+            if (sb.Length == 0) sb.AppendLine("_No candidate directories found or accessible._");
+
+            foreach (var chunk in ChunkForCodeFence(sb.ToString(), MaxChunk))
+                await channel.SendMessageAsync(chunk);
+        }
+
+        private static async Task ShowWhere(SocketTextChannel channel)
+        {
+            string working = Directory.GetCurrentDirectory();
+            string baseDir = AppContext.BaseDirectory ?? "(null)";
+            var envDataDir = Environment.GetEnvironmentVariable("DATA_DIR");
+            var envRemStore = Environment.GetEnvironmentVariable("REMINDER_STORE_PATH");
+            var envBotData = Environment.GetEnvironmentVariable("BOT_DATA_DIR");
+
+            var dirs = GetCandidateDirs();
+
+            var msg =
+$@"**Paths I will check**
+- Working dir: `{working}`
+- App base dir: `{baseDir}`
+- DATA_DIR: `{envDataDir ?? "(unset)"}`
+- REMINDER_STORE_PATH: `{envRemStore ?? "(unset)"}`
+- BOT_DATA_DIR: `{envBotData ?? "(unset)"}`
+- Common mounts: `/var/data`, `/data`, `./data`
+
+**Search order**
+{string.Join("\n", dirs.Select(d => "- `" + d + "`"))}
+
+Tip: On Render, set a Disk mount path (e.g., `/var/data`) and set `DATA_DIR` to that path. Save your JSON there.";
+            foreach (var chunk in ChunkForCodeFence(msg, MaxChunk))
+                await channel.SendMessageAsync(chunk);
+        }
+
+        // ---------- File Sending ----------
+
+        private static async Task SendRawFiles(SocketTextChannel channel, Dictionary<string, string> fullPathsByName)
+        {
+            foreach (var kvp in fullPathsByName)
+            {
+                var fullPath = kvp.Value;
+                try
+                {
+                    await channel.SendFileAsync(fullPath, $"📦 `{Path.GetFileName(fullPath)}`");
+                }
+                catch (Exception ex)
+                {
+                    await channel.SendMessageAsync($"⚠️ Could not send `{fullPath}`: {ex.Message}");
+                }
             }
         }
 
-        private static async Task SendReadableEmbeds(SocketTextChannel channel, IEnumerable<string> files)
+        private static async Task SendReadableEmbeds(SocketTextChannel channel, Dictionary<string, string> fullPathsByName)
         {
-            foreach (var file in files)
+            foreach (var kvp in fullPathsByName)
             {
-                if (!File.Exists(file))
-                {
-                    await channel.SendMessageAsync($"ℹ️ `{file}` not found.");
-                    continue;
-                }
-
+                var name = Path.GetFileName(kvp.Key);
+                var path = kvp.Value;
                 string pretty;
                 long sizeBytes = 0;
 
                 try
                 {
-                    var json = await File.ReadAllTextAsync(file, Encoding.UTF8);
-                    sizeBytes = new FileInfo(file).Length;
+                    var json = await File.ReadAllTextAsync(path, Encoding.UTF8);
+                    sizeBytes = new FileInfo(path).Length;
                     pretty = TryPrettyPrint(json, out var error)
-                        ? TryPrettyPrintReturn(json)
+                        ? Pretty(json)
                         : $"/* Invalid JSON (showing raw) - {error} */\n" + json;
                 }
                 catch (Exception ex)
                 {
-                    await channel.SendMessageAsync($"⚠️ Could not read `{file}`: {ex.Message}");
+                    await channel.SendMessageAsync($"⚠️ Could not read `{path}`: {ex.Message}");
                     continue;
                 }
 
-                // Build a compact header embed first
                 var embed = new EmbedBuilder()
-                    .WithTitle($"📄 {file}")
-                    .WithDescription($"Size: `{sizeBytes:n0}` bytes\nMode: `embed` (pretty-printed; long files are split across messages)\nTip: use `!dump-databases raw {file}` to download.")
+                    .WithTitle($"📄 {name}")
+                    .WithDescription($"Path: `{path}`\nSize: `{sizeBytes:n0}` bytes\nMode: `embed` (pretty-printed; long files are split).")
                     .WithColor(new Color(70, 130, 180))
                     .WithCurrentTimestamp()
                     .Build();
-
                 await channel.SendMessageAsync(embed: embed);
 
-                // Chunk pretty JSON inside code fences, keeping each message <= 2000 chars
                 foreach (var chunk in ChunkForCodeFence(pretty, MaxChunk))
-                {
                     await channel.SendMessageAsync($"```json\n{chunk}\n```");
+            }
+        }
+
+        // ---------- Helpers ----------
+
+        private static Dictionary<string, string> ResolveExistingFiles(IEnumerable<string> names, IEnumerable<string> searchDirs)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in names)
+            {
+                // If they provided an absolute/relative path that already exists, use it directly.
+                if (File.Exists(n))
+                {
+                    result[n] = Path.GetFullPath(n);
+                    continue;
+                }
+
+                foreach (var dir in searchDirs)
+                {
+                    try
+                    {
+                        if (!Directory.Exists(dir)) continue;
+                        var full = Path.Combine(dir, n);
+                        if (File.Exists(full))
+                        {
+                            result[n] = full;
+                            break;
+                        }
+                    }
+                    catch { /* ignore path errors */ }
                 }
             }
+            return result;
+        }
+
+        private static IEnumerable<string> GetCandidateDirs()
+        {
+            var dirs = new List<string>();
+
+            // Highest priority: env vars you control
+            var dataDir = Environment.GetEnvironmentVariable("DATA_DIR");
+            var remPath = Environment.GetEnvironmentVariable("REMINDER_STORE_PATH");
+            var botData = Environment.GetEnvironmentVariable("BOT_DATA_DIR");
+            if (!string.IsNullOrWhiteSpace(dataDir)) dirs.Add(dataDir);
+            if (!string.IsNullOrWhiteSpace(remPath)) dirs.Add(remPath);
+            if (!string.IsNullOrWhiteSpace(botData)) dirs.Add(botData);
+
+            // Common Render disk mounts
+            dirs.Add("/var/data");
+            dirs.Add("/data");
+
+            // App dirs
+            dirs.Add(Directory.GetCurrentDirectory());
+            var baseDir = AppContext.BaseDirectory;
+            if (!string.IsNullOrWhiteSpace(baseDir)) dirs.Add(baseDir);
+
+            // Likely subfolders
+            dirs.Add(Path.Combine(Directory.GetCurrentDirectory(), "data"));
+            if (!string.IsNullOrWhiteSpace(baseDir)) dirs.Add(Path.Combine(baseDir, "data"));
+
+            // Deduplicate while preserving order
+            return dirs.Where(d => !string.IsNullOrWhiteSpace(d))
+                       .Select(d => d.TrimEnd('/', '\\'))
+                       .Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         private static bool TryPrettyPrint(string json, out string error)
         {
             try
             {
-                using var doc = JsonDocument.Parse(json);
+                using var _ = JsonDocument.Parse(json);
                 error = "";
                 return true;
             }
@@ -164,7 +294,7 @@ namespace YourBot.Commands
             }
         }
 
-        private static string TryPrettyPrintReturn(string json)
+        private static string Pretty(string json)
         {
             using var doc = JsonDocument.Parse(json);
             var options = new JsonSerializerOptions
@@ -177,29 +307,22 @@ namespace YourBot.Commands
 
         private static IEnumerable<string> ChunkForCodeFence(string text, int maxChunk)
         {
-            // Ensure we don’t break inside a code fence header; just slice the raw text.
-            if (string.IsNullOrEmpty(text))
+            if (string.IsNullOrEmpty(text)) { yield return ""; yield break; }
+            int i = 0;
+            while (i < text.Length)
             {
-                yield return "";
-                yield break;
-            }
-
-            int idx = 0;
-            while (idx < text.Length)
-            {
-                int len = Math.Min(maxChunk, text.Length - idx);
-                // Try to break at a newline when possible to keep it tidy
-                int lastNewline = text.LastIndexOf('\n', idx + len - 1, len);
-                if (lastNewline <= idx || lastNewline == -1)
+                int len = Math.Min(maxChunk, text.Length - i);
+                int lastNewline = text.LastIndexOf('\n', i + len - 1, len);
+                if (lastNewline <= i || lastNewline == -1)
                 {
-                    yield return text.Substring(idx, len);
-                    idx += len;
+                    yield return text.Substring(i, len);
+                    i += len;
                 }
                 else
                 {
-                    int take = lastNewline - idx + 1;
-                    yield return text.Substring(idx, take);
-                    idx += take;
+                    int take = lastNewline - i + 1;
+                    yield return text.Substring(i, take);
+                    i += take;
                 }
             }
         }
