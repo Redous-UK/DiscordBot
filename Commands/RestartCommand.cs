@@ -1,40 +1,60 @@
-﻿using Discord.WebSocket;
+﻿
+
 using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using Discord.WebSocket;
 
-namespace MyDiscordBot.Commands
+public class RestartCommand : ILegacyCommand
 {
-    public class RestartCommand : ILegacyCommand
+    public string Name => "restart";
+    public string Description => "Admin only. Restarts the bot’s Render service.";
+
+    public string Category => "⚙️ Settings & Config";
+
+    public async Task ExecuteAsync(SocketMessage message, string[] args)
     {
-        public string Name => "restart";
-
-        public string Description => "This command restarts the bot but can only be run by Admin.";
-        public string Category => "⚙️ Settings & Config";
-
-        public async Task ExecuteAsync(SocketMessage message, string[] args)
+        if (message.Channel is not SocketTextChannel ch)
         {
-            if (message.Channel is not SocketGuildChannel guildChannel)
-            {
-                await message.Channel.SendMessageAsync("❌ This command must be used in a server.");
-                return;
-            }
+            await message.Channel.SendMessageAsync("Run this in a server channel.");
+            return;
+        }
+        var member = ch.GetUser(message.Author.Id);
+        if (member == null || !member.GuildPermissions.Administrator)
+        {
+            await ch.SendMessageAsync("🚫 Admins only.");
+            return;
+        }
 
-            var user = message.Author as SocketGuildUser;
-            if (user == null || !user.GuildPermissions.Administrator)
-            {
-                await message.Channel.SendMessageAsync("⛔ You must be an admin to restart the bot.");
-                return;
-            }
+        var serviceId = Environment.GetEnvironmentVariable("RENDER_SERVICE_ID");
+        var apiKey = Environment.GetEnvironmentVariable("RENDER_API_KEY");
+        if (string.IsNullOrWhiteSpace(serviceId) || string.IsNullOrWhiteSpace(apiKey))
+        {
+            await ch.SendMessageAsync("⚠️ Missing RENDER_SERVICE_ID or RENDER_API_KEY env vars.");
+            return;
+        }
 
-            await message.Channel.SendMessageAsync("🔁 Restarting bot...");
+        await ch.SendMessageAsync("🔄 Requesting restart…");
+        try
+        {
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", apiKey);
 
-            // Delay to let the message go through
+            var resp = await http.PostAsync(
+                $"https://api.render.com/v1/services/{serviceId}/restart",
+                content: null
+            );
 
-            Program.BotInstance.Dispose();
-
-            await Task.Delay(1000);
-
-            Environment.Exit(100); // Use exit code 100 for restart
+            if (resp.IsSuccessStatusCode)
+                await ch.SendMessageAsync("✅ Restart requested. Give it a moment to cycle.");
+            else
+                await ch.SendMessageAsync($"⚠️ Restart API returned {(int)resp.StatusCode}: {await resp.Content.ReadAsStringAsync()}");
+        }
+        catch (Exception ex)
+        {
+            await ch.SendMessageAsync($"❌ Error calling Render API: {ex.Message}");
         }
     }
 }
