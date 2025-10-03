@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using Discord;
 using Discord.WebSocket;
 
-namespace YourBot.Commands
+namespace MyDiscordBot.Commands
 {
     public class DumpDatabasesCommand : ILegacyCommand
     {
