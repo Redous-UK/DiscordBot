@@ -1,6 +1,7 @@
 ﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
+using MyDiscordBot.Background;
 using MyDiscordBot.Commands;
 using MyDiscordBot.Models;
 using MyDiscordBot.Services;
@@ -99,6 +100,15 @@ namespace MyDiscordBot
 
             await _client.LoginAsync(TokenType.Bot, _token);
             await _client.StartAsync();
+
+            _client.Ready += () =>
+            {
+                // optional simple logger
+                void Log(string s) => Console.WriteLine($"[reminders] {s}");
+                ReminderDispatcher.Start(_client, Program.BotInstance.ReminderService, Log);
+                return Task.CompletedTask;
+            };
+
 
             // keep alive
             await Task.Delay(Timeout.Infinite);
