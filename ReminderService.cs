@@ -20,7 +20,6 @@ namespace MyDiscordBot.Services
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            // DateTime is handled as ISO-8601; no custom converters needed.
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
@@ -32,7 +31,6 @@ namespace MyDiscordBot.Services
             var target = dbPath ?? Path.Combine(dataDir, "reminders.json");
             var legacy = Path.Combine(AppContext.BaseDirectory, "reminders.json");
 
-            // One-time migration from legacy location to the persistent disk
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
@@ -47,9 +45,97 @@ namespace MyDiscordBot.Services
             Load();
         }
 
+        // NEW preferred overload (guild/channel + UTC + TimeSpan repeat)
+        public Reminder AddReminder(
+            ulong guildId,
+            ulong channelId,
+            ulong userId,
+            string text,
+            DateTimeOffset dueAtUtc,
+            TimeSpan? repeatEvery)
+        {
+            var r = new Reminder
+            {
+                GuildId = guildId,
+                ChannelId = channelId,
+                UserId = userId,
+                Message = text ?? string.Empty,
+                DueAtUtc = dueAtUtc.ToUniversalTime(),
+                RepeatMinutes = repeatEvery.HasValue ? (int?)Math.Max(1, (int)repeatEvery.Value.TotalMinutes) : null
+            };
+
+            lock (_sync)
+            {
+                if (!_store.TryGetValue(userId, out var list))
+                {
+                    list = new List<Reminder>();
+                    _store[userId] = list;
+                }
+                list.Add(r);
+                Save_NoLock();
+            }
+
+            return r;
+        }
+
+        // LEGACY overload kept for compatibility. Internally forwards to the new one.
+        public Reminder AddReminder(ulong userId, DateTime timeUtc, string message, int? repeatMinutes = null)
+        {
+            if (timeUtc.Kind == DateTimeKind.Local) timeUtc = timeUtc.ToUniversalTime();
+            var due = new DateTimeOffset(DateTime.SpecifyKind(timeUtc, DateTimeKind.Utc));
+            return AddReminder(
+                guildId: 0UL,
+                channelId: 0UL,
+                userId: userId,
+                text: message,
+                dueAtUtc: due,
+                repeatEvery: repeatMinutes.HasValue ? TimeSpan.FromMinutes(Math.Max(1, repeatMinutes.Value)) : (TimeSpan?)null
+            );
+        }
+
+        // Pop and/or reschedule all due reminders across users (UTC-based).
+        public List<Reminder> PopDueForDelivery(DateTimeOffset? nowUtc = null)
+        {
+            nowUtc ??= DateTimeOffset.UtcNow;
+            var dueAll = new List<Reminder>();
+
+            lock (_sync)
+            {
+                foreach (var kv in _store)
+                {
+                    var list = kv.Value;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var r = list[i];
+                        if (r.DueAtUtc <= nowUtc.Value)
+                        {
+                            dueAll.Add(r);
+
+                            if (r.RepeatMinutes is int minutes && minutes > 0)
+                            {
+                                var step = TimeSpan.FromMinutes(minutes);
+                                var next = r.DueAtUtc + step;
+                                while (next <= nowUtc.Value) next += step;
+                                r.DueAtUtc = next;
+                            }
+                            else
+                            {
+                                list.RemoveAt(i);
+                                i--;
+                            }
+                        }
+                    }
+                }
+                Save_NoLock();
+            }
+
+            return dueAll.OrderBy(r => r.DueAtUtc).ToList();
+        }
+
+        // Back-compat API (kept if existing code expects this shape)
         public Dictionary<ulong, List<Reminder>> PopDueRemindersForAll(DateTime? nowUtc = null)
         {
-            nowUtc ??= DateTime.UtcNow;
+            var now = nowUtc.HasValue ? new DateTimeOffset(DateTime.SpecifyKind(nowUtc.Value, DateTimeKind.Utc)) : DateTimeOffset.UtcNow;
             var result = new Dictionary<ulong, List<Reminder>>();
 
             lock (_sync)
@@ -58,22 +144,21 @@ namespace MyDiscordBot.Services
                 {
                     var userId = kv.Key;
                     var list = kv.Value;
-
                     List<Reminder>? due = null;
 
                     for (int i = 0; i < list.Count; i++)
                     {
                         var r = list[i];
-                        if (r.Time <= nowUtc.Value)
+                        if (r.DueAtUtc <= now)
                         {
                             (due ??= new List<Reminder>()).Add(r);
 
                             if (r.RepeatMinutes is int minutes && minutes > 0)
                             {
-                                var next = r.Time;
                                 var step = TimeSpan.FromMinutes(minutes);
-                                while (next <= nowUtc.Value) next = next.Add(step);
-                                r.Time = next; // keep it
+                                var next = r.DueAtUtc + step;
+                                while (next <= now) next += step;
+                                r.DueAtUtc = next;
                             }
                             else
                             {
@@ -93,68 +178,6 @@ namespace MyDiscordBot.Services
             return result;
         }
 
-        private static string ResolveDataDir()
-        {
-            var candidates = new[]
-            {
-                Environment.GetEnvironmentVariable("DATA_DIR"),         // e.g., "/data" (your current setting)
-                Environment.GetEnvironmentVariable("RENDER_DISK_PATH"),  // Render exposes this for mounted disks
-                "/data",                                               // common mount path
-                "/var/data"                                            // another common choice
-            };
-
-            foreach (var p in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(p)) continue;
-                try
-                {
-                    Directory.CreateDirectory(p);
-                    return p;
-                }
-                catch { /* try next candidate */ }
-            }
-
-            // Fallback to app directory if no disk is available
-            return AppContext.BaseDirectory;
-        }
-
-        public List<Reminder> GetReminders(ulong userId)
-        {
-            lock (_sync)
-            {
-                if (_store.TryGetValue(userId, out var list))
-                    return list.OrderBy(r => r.Time).ToList();
-                return new List<Reminder>();
-            }
-        }
-
-        public Reminder AddReminder(ulong userId, DateTime timeUtc, string message, int? repeatMinutes = null)
-        {
-            if (timeUtc.Kind == DateTimeKind.Local)
-                timeUtc = timeUtc.ToUniversalTime();
-
-            var r = new Reminder
-            {
-                Time = DateTime.SpecifyKind(timeUtc, DateTimeKind.Utc),
-                Message = message ?? string.Empty,
-                RepeatMinutes = (repeatMinutes is > 0) ? repeatMinutes : null
-            };
-
-            lock (_sync)
-            {
-                if (!_store.TryGetValue(userId, out var list))
-                {
-                    list = new List<Reminder>();
-                    _store[userId] = list;
-                }
-
-                list.Add(r);
-                Save_NoLock();
-            }
-
-            return r;
-        }
-
         public bool RemoveReminder(ulong userId, Guid reminderId)
         {
             lock (_sync)
@@ -169,61 +192,56 @@ namespace MyDiscordBot.Services
             }
         }
 
-        public List<Reminder> PopDueReminders(ulong userId, DateTime? nowUtc = null)
+        public List<Reminder> GetReminders(ulong userId)
         {
-            nowUtc ??= DateTime.UtcNow;
-            var due = new List<Reminder>();
-
             lock (_sync)
             {
-                if (!_store.TryGetValue(userId, out var list) || list.Count == 0)
-                    return due;
-
-                for (int i = 0; i < list.Count; i++)
-                {
-                    var r = list[i];
-                    if (r.Time <= nowUtc.Value)
-                    {
-                        due.Add(r);
-
-                        if (r.RepeatMinutes is int minutes && minutes > 0)
-                        {
-                            var next = r.Time;
-                            var step = TimeSpan.FromMinutes(minutes);
-                            while (next <= nowUtc.Value) next = next.Add(step);
-                            r.Time = next;
-                        }
-                        else
-                        {
-                            list.RemoveAt(i);
-                            i--;
-                        }
-                    }
-                }
-
-                Save_NoLock();
+                if (_store.TryGetValue(userId, out var list))
+                    return list.OrderBy(r => r.DueAtUtc).ToList();
+                return new List<Reminder>();
             }
-
-            return due.OrderBy(r => r.Time).ToList();
         }
 
         private void Load()
         {
             try
             {
-                if (!File.Exists(_dbPath))
+                if (!File.Exists(_dbPath)) { _store = new(); return; }
+                var json = File.ReadAllText(_dbPath);
+
+                // Try new format first
+                var data = JsonSerializer.Deserialize<Dictionary<ulong, List<Reminder>>>(json, _jsonOptions);
+                if (data != null)
                 {
-                    _store = new Dictionary<ulong, List<Reminder>>();
+                    _store = data;
                     return;
                 }
+            }
+            catch { /* fall through to legacy */ }
 
+            // Legacy fallback: old model had DateTime Time; map to DueAtUtc
+            try
+            {
                 var json = File.ReadAllText(_dbPath);
-                var data = JsonSerializer.Deserialize<Dictionary<ulong, List<Reminder>>>(json, _jsonOptions);
-                _store = data ?? new Dictionary<ulong, List<Reminder>>();
+                var legacy = JsonSerializer.Deserialize<Dictionary<ulong, List<OldReminder>>>(json, _jsonOptions) ?? new();
+                _store = legacy.ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value.Select(o => new Reminder
+                    {
+                        Id = o.Id,
+                        GuildId = 0UL,
+                        ChannelId = 0UL,
+                        UserId = kv.Key,
+                        Message = o.Message ?? string.Empty,
+                        DueAtUtc = o.Time.Kind == DateTimeKind.Utc ? new DateTimeOffset(o.Time) : new DateTimeOffset(o.Time.ToUniversalTime()),
+                        RepeatMinutes = o.RepeatMinutes
+                    }).ToList()
+                );
+                Save_NoLock(); // persist in the new shape
             }
             catch
             {
-                _store = new Dictionary<ulong, List<Reminder>>();
+                _store = new();
             }
         }
 
@@ -231,20 +249,47 @@ namespace MyDiscordBot.Services
         {
             var json = JsonSerializer.Serialize(_store, _jsonOptions);
             Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
-            File.WriteAllText(_dbPath, json);
+            var tmp = _dbPath + ".tmp";
+            File.WriteAllText(tmp, json);
+            if (File.Exists(_dbPath)) { try { File.Replace(tmp, _dbPath, null); } catch { File.Delete(_dbPath); File.Move(tmp, _dbPath); } }
+            else File.Move(tmp, _dbPath);
+        }
+
+        private static string ResolveDataDir()
+        {
+            var candidates = new[]
+            {
+                Environment.GetEnvironmentVariable("DATA_DIR"),
+                Environment.GetEnvironmentVariable("RENDER_DISK_PATH"),
+                "/data",
+                "/var/data"
+            };
+
+            foreach (var p in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(p)) continue;
+                try { Directory.CreateDirectory(p); return p; } catch { }
+            }
+            return AppContext.BaseDirectory;
         }
 
         public void Dispose()
         {
             if (!_disposed)
             {
-                lock (_sync)
-                {
-                    Save_NoLock();
-                }
+                lock (_sync) { Save_NoLock(); }
                 _disposed = true;
             }
             GC.SuppressFinalize(this);
+        }
+
+        // Legacy DTO for migration
+        private class OldReminder
+        {
+            public Guid Id { get; set; }
+            public DateTime Time { get; set; }
+            public string? Message { get; set; }
+            public int? RepeatMinutes { get; set; }
         }
     }
 }

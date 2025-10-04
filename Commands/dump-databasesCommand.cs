@@ -19,12 +19,12 @@ namespace MyDiscordBot.Commands
 
         // Add/trim file names to match your project
         private static readonly string[] DefaultDbFiles =
-        {
+        [
             "reminders.json",
             "birthdays.json",
             "guildsettings.json",
             "users.json"
-        };
+        ];
 
         private const int MaxChunk = 1900;
 

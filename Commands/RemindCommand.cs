@@ -1,5 +1,7 @@
-﻿using Discord.WebSocket;
+﻿using Discord;
+using Discord.WebSocket;
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -8,7 +10,7 @@ namespace MyDiscordBot.Commands
     public class RemindCommand : ILegacyCommand
     {
         public string Name => "remind";
-        public string Description => "Sets a reminder. Usage: !remind <time> <message> (e.g., !remind 10m Take a break)";
+        public string Description => "Sets a reminder. Usage: !remind <time> <message> (e.g., !remind 10m Take a break). Optional: --every <minutes> for repeats.";
         public string Category => "🔔 Reminders & Notifications";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
@@ -16,7 +18,9 @@ namespace MyDiscordBot.Commands
             // Basic usage check
             if (args.Length < 2)
             {
-                await message.Channel.SendMessageAsync("Usage: `!remind <time> <message>` (e.g., `!remind 10m Take a break`)");
+                await message.Channel.SendMessageAsync(
+                    "Usage: `!remind <time> <message>` (e.g., `!remind 10m Take a break`)\n" +
+                    "Optional repeat: `!remind 10m Take a break --every 60` (minutes)");
                 return;
             }
 
@@ -28,71 +32,84 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var timeInput = args[0];
-            var reminderMessage = string.Join(" ", args.Skip(1));
+            // Parse optional repeat flag: --every <minutes>
+            int? repeatMinutes = null;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "--every", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    if (int.TryParse(args[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var mins) && mins > 0)
+                    {
+                        repeatMinutes = mins;
+                        // remove the flag and value from args so the message join works cleanly
+                        args = args.Where((_, idx) => idx != i && idx != i + 1).ToArray();
+                    }
+                    break; // only honor the first occurrence
+                }
+            }
 
-            if (!TryParseTime(timeInput, out DateTime remindTimeUtc))
+            var timeToken = args[0];
+            var text = string.Join(" ", args.Skip(1)).Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                await message.Channel.SendMessageAsync("❌ Please provide a reminder message.");
+                return;
+            }
+
+            if (!TryParseDelayTokenToUtc(timeToken, out DateTimeOffset dueAtUtc))
             {
                 await message.Channel.SendMessageAsync("Invalid time format. Use formats like `10m`, `2h`, `1d`.");
                 return;
             }
 
-            // Optional: support repeats like "--every 60"
-            int? repeatMinutes = null;
-            // If you plan to support it later, parse args here and set repeatMinutes
+            // Delivery context
+            ulong guildId = 0UL;
+            if (message.Channel is SocketGuildChannel gc)
+                guildId = gc.Guild.Id;
+            ulong channelId = message.Channel.Id;
 
-            reminderService.AddReminder(
-                message.Author.Id,
-                remindTimeUtc,
-                reminderMessage,
-                repeatMinutes
-            );
+            var repeatEvery = repeatMinutes.HasValue ? TimeSpan.FromMinutes(repeatMinutes.Value) : (TimeSpan?)null;
 
-            await message.Channel.SendMessageAsync($":alarm_clock: I'll remind you in {DescribeDelta(remindTimeUtc - DateTime.UtcNow)}: \"{reminderMessage}\"");
+            // Preferred: new overload with guild/channel + UTC + TimeSpan repeat
+            // Ensure your ReminderService defines:
+            // AddReminder(ulong guildId, ulong channelId, ulong userId, string text, DateTimeOffset dueAtUtc, TimeSpan? repeatEvery)
+            reminderService.AddReminder(guildId, channelId, message.Author.Id, text, dueAtUtc, repeatEvery);
+
+            var eta = dueAtUtc - DateTimeOffset.UtcNow;
+            await message.Channel.SendMessageAsync(
+                $"⏰ I’ll remind you in {DescribeDelta(eta)}: \"{text}\"" +
+                (repeatMinutes.HasValue ? $" (repeats every {repeatMinutes}m)" : ""));
         }
 
-        // Accepts Xm / Xh / Xd (minutes/hours/days). Stores UTC trigger time.
-        private bool TryParseTime(string input, out DateTime resultUtc)
+        // Accepts Xm / Xh / Xd and returns an absolute UTC timestamp
+        private static bool TryParseDelayTokenToUtc(string input, out DateTimeOffset dueAtUtc)
         {
-            resultUtc = DateTime.UtcNow;
-
+            dueAtUtc = DateTimeOffset.UtcNow;
             if (string.IsNullOrWhiteSpace(input) || input.Length < 2)
                 return false;
 
             char unit = char.ToLowerInvariant(input[^1]);
-            string numberPart = input[..^1];
-
-            if (!int.TryParse(numberPart, out int value) || value <= 0)
+            var numberPart = input[..^1];
+            if (!int.TryParse(numberPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) || value <= 0)
                 return false;
 
-            try
+            var now = DateTimeOffset.UtcNow;
+            dueAtUtc = unit switch
             {
-                resultUtc = unit switch
-                {
-                    'm' => DateTime.UtcNow.AddMinutes(value),
-                    'h' => DateTime.UtcNow.AddHours(value),
-                    'd' => DateTime.UtcNow.AddDays(value),
-                    _ => DateTime.MinValue
-                };
-
-                return resultUtc != DateTime.MinValue;
-            }
-            catch
-            {
-                return false;
-            }
+                'm' => now.AddMinutes(value),
+                'h' => now.AddHours(value),
+                'd' => now.AddDays(value),
+                _ => DateTimeOffset.MinValue
+            };
+            return dueAtUtc != DateTimeOffset.MinValue;
         }
 
-        private string DescribeDelta(TimeSpan span)
+        private static string DescribeDelta(TimeSpan span)
         {
-            if (span.TotalSeconds < 0) return "0s";
-
-            if (span.TotalMinutes < 1)
-                return $"{span.Seconds}s";
-            if (span.TotalHours < 1)
-                return $"{span.Minutes}m {span.Seconds}s";
-            if (span.TotalDays < 1)
-                return $"{(int)span.TotalHours}h {span.Minutes}m";
+            if (span.TotalSeconds < 1) return "0s";
+            if (span.TotalMinutes < 1) return $"{span.Seconds}s";
+            if (span.TotalHours < 1) return $"{span.Minutes}m {span.Seconds}s";
+            if (span.TotalDays < 1) return $"{(int)span.TotalHours}h {span.Minutes}m";
             return $"{(int)span.TotalDays}d {span.Hours}h";
         }
     }
