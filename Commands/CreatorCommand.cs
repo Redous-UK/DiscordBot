@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -11,43 +13,16 @@ using MyDiscordBot.Guards;
 
 namespace MyDiscordBot.Commands
 {
-    // -------------------- Agency Guild Guard --------------------
-    internal static class GuildGuards
-    {
-        private static readonly HashSet<ulong> AgencyGuildIds = LoadAgencyGuildIds();
-
-        public static bool IsAgencyGuild(ulong guildId)
-            => AgencyGuildIds.Count > 0 && AgencyGuildIds.Contains(guildId);
-
-        private static HashSet<ulong> LoadAgencyGuildIds()
-        {
-            var raw =
-                Environment.GetEnvironmentVariable("AGENCY_GUILD_IDS") ??
-                Environment.GetEnvironmentVariable("AGENCY_GUILD_ID");
-
-            var set = new HashSet<ulong>();
-            if (string.IsNullOrWhiteSpace(raw))
-                return set;
-
-            foreach (var token in raw.Split(
-                         new[] { ',', ' ', ';', '\t', '\n', '\r' },
-                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (ulong.TryParse(token, out var id) && id != 0)
-                    set.Add(id);
-            }
-
-            return set;
-        }
-    }
-
     // -------------------- Models --------------------
     internal sealed class CreatorProfile
     {
         public string Handle { get; set; } = "";
         public string DisplayName { get; set; } = "";
         public string TiktokUid { get; set; } = "";
-        public string Region { get; set; } = "";
+        public string Diamonds { get; set; } = "";
+        public string GoLiveDays { get; set; } = "";
+        public string Manager { get; set; } = "";
+        public string Promote { get; set; } = "";
         public string Notes { get; set; } = "";
 
         public DateTimeOffset AddedAtUtc { get; set; } = DateTimeOffset.UtcNow;
@@ -123,7 +98,9 @@ namespace MyDiscordBot.Commands
         public string Description => "Agency creator management commands.";
         public string Category => "⚙️ Settings & Config";
         public string Usage =>
-            "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [region=] [notes=] | !creator remove <@handle>";
+            "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [goLiveDays=] [Manager=] [Promote=] [notes=] | !creator remove <@handle> | !creator import (attach CSV)";
+        
+        private static readonly HttpClient _http = new HttpClient();
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
@@ -133,6 +110,7 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
+            // ✅ Uses your shared guard: MyDiscordBot.Guards.GuildGuards
             if (!GuildGuards.IsAgencyGuild(gch.Guild.Id))
             {
                 await message.Channel.SendMessageAsync("❌ This is not an agency guild.");
@@ -167,6 +145,10 @@ namespace MyDiscordBot.Commands
                     await Remove(message, gch, rest);
                     break;
 
+                case "import":
+                    await ImportCsv(message, gch);
+                    break;
+
                 default:
                     await message.Channel.SendMessageAsync($"Unknown subcommand `{sub}`.\nUsage: `{Usage}`");
                     break;
@@ -199,7 +181,10 @@ namespace MyDiscordBot.Commands
             await message.Channel.SendMessageAsync(
                 $"**{c.DisplayName}** ({c.Handle})\n" +
                 $"UID: {(string.IsNullOrWhiteSpace(c.TiktokUid) ? "—" : c.TiktokUid)}\n" +
-                $"Region: {(string.IsNullOrWhiteSpace(c.Region) ? "—" : c.Region)}\n" +
+                $"Diamonds: {(string.IsNullOrWhiteSpace(c.Diamonds) ? "—" : c.Diamonds)}\n" +
+                $"GoLiveDays: {(string.IsNullOrWhiteSpace(c.GoLiveDays) ? "—" : c.GoLiveDays)}\n" +
+                $"Manager: {(string.IsNullOrWhiteSpace(c.Manager) ? "—" : c.Manager)}\n" +
+                $"Promote: {(string.IsNullOrWhiteSpace(c.Promote) ? "—" : c.Promote)}\n" +
                 $"Notes: {(string.IsNullOrWhiteSpace(c.Notes) ? "—" : c.Notes)}\n" +
                 $"Added: {c.AddedAtUtc:yyyy-MM-dd} by <@{c.AddedByDiscordUserId}>"
             );
@@ -237,7 +222,7 @@ namespace MyDiscordBot.Commands
             if (args.Length < 2)
             {
                 await message.Channel.SendMessageAsync(
-                    "Usage: `!creator add <@handle> <displayName> [uid=] [region=] [notes=]`");
+                    "Usage: `!creator add <@handle> <displayName> [uid=] [goLiveDays=] [Manager=] [Promote=] [notes=]`");
                 return;
             }
 
@@ -245,15 +230,24 @@ namespace MyDiscordBot.Commands
             var displayName = args[1].Trim('"');
 
             var uid = "";
-            var region = "";
+            var diamonds = "";
+            var goLiveDays = "";
+            var manager = "";
+            var promote = "";
             var notes = "";
 
             foreach (var a in args.Skip(2))
             {
                 if (a.StartsWith("uid=", StringComparison.OrdinalIgnoreCase))
                     uid = a[4..];
-                else if (a.StartsWith("region=", StringComparison.OrdinalIgnoreCase))
-                    region = a[7..];
+                else if (a.StartsWith("diamonds=", StringComparison.OrdinalIgnoreCase))
+                    diamonds = a[7..];
+                else if (a.StartsWith("golivedays=", StringComparison.OrdinalIgnoreCase))
+                    goLiveDays = a[12..];
+                else if (a.StartsWith("manager=", StringComparison.OrdinalIgnoreCase))
+                    manager = a[8..].Trim('"');
+                else if (a.StartsWith("promote=", StringComparison.OrdinalIgnoreCase))
+                    promote = a[8..].Trim('"');
                 else if (a.StartsWith("notes=", StringComparison.OrdinalIgnoreCase))
                     notes = a[6..].Trim('"');
             }
@@ -270,9 +264,13 @@ namespace MyDiscordBot.Commands
                 Handle = handle,
                 DisplayName = displayName,
                 TiktokUid = uid,
-                Region = region,
+                Diamonds = diamonds,
+                GoLiveDays = goLiveDays,
+                Manager = manager,
+                Promote = promote,
                 Notes = notes,
-                AddedByDiscordUserId = message.Author.Id
+                AddedByDiscordUserId = message.Author.Id,
+                AddedAtUtc = DateTimeOffset.UtcNow
             });
 
             BotStores.Creators.SaveAll(all);
@@ -305,6 +303,240 @@ namespace MyDiscordBot.Commands
 
             BotStores.Creators.SaveAll(all);
             await message.Channel.SendMessageAsync($"✅ Removed {handle}.");
+        }
+
+        // -------------------- CSV Import --------------------
+
+        private static async Task ImportCsv(SocketMessage message, SocketGuildChannel gch)
+        {
+            if (!IsAdmin(gch, message.Author))
+            {
+                await message.Channel.SendMessageAsync("🚫 Admins only.");
+                return;
+            }
+
+            var attachment = message.Attachments?.FirstOrDefault();
+            if (attachment == null)
+            {
+                await message.Channel.SendMessageAsync(
+                    "Attach a CSV file to the same message.\n" +
+                    "Usage: `!creator import` (with a `.csv` attached)\n\n" +
+                    "Required header: `handle`\n" +
+                    "Optional: `displayName,tiktokUid,diamonds,GoLiveDays,Manager,Promote,notes`");
+                return;
+            }
+
+            var fileName = attachment.Filename ?? "upload.csv";
+            if (!fileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+            {
+                await message.Channel.SendMessageAsync("❌ Please attach a `.csv` file.");
+                return;
+            }
+
+            string csvText;
+            try
+            {
+                csvText = await _http.GetStringAsync(attachment.Url);
+            }
+            catch (Exception ex)
+            {
+                await message.Channel.SendMessageAsync($"❌ Failed to download CSV: {ex.Message}");
+                return;
+            }
+
+            if (!TryParseCreatorsCsv(csvText, out var rows, out var error))
+            {
+                await message.Channel.SendMessageAsync($"❌ CSV parse error: {error}");
+                return;
+            }
+
+            if (rows.Count == 0)
+            {
+                await message.Channel.SendMessageAsync("CSV contained no rows to import.");
+                return;
+            }
+
+            var store = BotStores.Creators;
+            var all = store.LoadAll();
+
+            int added = 0, updated = 0, skipped = 0;
+
+            foreach (var r in rows)
+            {
+                if (string.IsNullOrWhiteSpace(r.Handle))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                var norm = CreatorStore.NormalizeHandle(r.Handle);
+                var existing = all.FirstOrDefault(c => CreatorStore.NormalizeHandle(c.Handle) == norm);
+
+                if (existing == null)
+                {
+                    all.Add(new CreatorProfile
+                    {
+                        Handle = norm,
+                        DisplayName = r.DisplayName ?? "",
+                        TiktokUid = r.TiktokUid ?? "",
+                        Diamonds = r.Diamonds ?? "",
+                        GoLiveDays = r.GoLiveDays ?? "",
+                        Manager = r.Manager ?? "",
+                        Promote = r.Promote ?? "",
+                        Notes = r.Notes ?? "",
+                        AddedAtUtc = DateTimeOffset.UtcNow,
+                        AddedByDiscordUserId = message.Author.Id
+                    });
+                    added++;
+                }
+                else
+                {
+                    // Don't overwrite with blanks
+                    if (!string.IsNullOrWhiteSpace(r.DisplayName)) existing.DisplayName = r.DisplayName!;
+                    if (!string.IsNullOrWhiteSpace(r.TiktokUid)) existing.TiktokUid = r.TiktokUid!;
+                    if (!string.IsNullOrWhiteSpace(r.Diamonds)) existing.Diamonds = r.Diamonds!;
+                    if (!string.IsNullOrWhiteSpace(r.GoLiveDays)) existing.GoLiveDays = r.GoLiveDays!;
+                    if (!string.IsNullOrWhiteSpace(r.Manager)) existing.Manager = r.Manager!;
+                    if (!string.IsNullOrWhiteSpace(r.Promote)) existing.Promote = r.Promote!;
+                    if (!string.IsNullOrWhiteSpace(r.Notes)) existing.Notes = r.Notes!;
+
+                    updated++;
+                }
+            }
+
+            store.SaveAll(all);
+
+            await message.Channel.SendMessageAsync(
+                $"✅ Import complete from `{fileName}`\n" +
+                $"- Added: **{added}**\n" +
+                $"- Updated: **{updated}**\n" +
+                $"- Skipped: **{skipped}**\n" +
+                $"- Total creators now: **{all.Count}**"
+            );
+        }
+
+        private sealed class ImportRow
+        {
+            public string Handle { get; set; } = "";
+            public string? DisplayName { get; set; }
+            public string? TiktokUid { get; set; }
+            public string? Diamonds { get; set; }
+            public string? GoLiveDays { get; set; }
+            public string? Manager { get; set; }
+            public string? Promote { get; set; }
+            public string? Notes { get; set; }
+        }
+
+        private static bool TryParseCreatorsCsv(string csv, out List<ImportRow> rows, out string error)
+        {
+            rows = new List<ImportRow>();
+            error = "";
+
+            var lines = ReadCsvLines(csv).Where(l => l != null).ToList();
+            if (lines.Count == 0)
+            {
+                error = "Empty file.";
+                return false;
+            }
+
+            var header = SplitCsvLine(lines[0]);
+            if (header.Count == 0)
+            {
+                error = "Missing header row.";
+                return false;
+            }
+
+            int Idx(string name) => header.FindIndex(h => string.Equals(h, name, StringComparison.OrdinalIgnoreCase));
+
+            var iHandle = Idx("Creator's username");
+            if (iHandle < 0)
+            {
+                error = "Header must include a `handle` column.";
+                return false;
+            }
+
+            var iDisplay = Idx("Creator's username");
+            var iUid = Idx("Creator ID:");
+            var iDiamonds = Idx("Diamonds in L30D");
+            var iGoLive = Idx("Valid go LIVE days in L30D");
+            var iManager = Idx("Creator Network manager");
+            var iPromote = Idx("Promote permission");
+            var iNotes = Idx("Notes");
+
+            for (int i = 1; i < lines.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i])) continue;
+
+                var cols = SplitCsvLine(lines[i]);
+
+                string Get(int idx) => (idx >= 0 && idx < cols.Count) ? cols[idx] : "";
+
+                var handle = Get(iHandle).Trim();
+                if (string.IsNullOrWhiteSpace(handle)) continue;
+
+                rows.Add(new ImportRow
+                {
+                    Handle = handle,
+                    DisplayName = NullIfBlank(Get(iDisplay)),
+                    TiktokUid = NullIfBlank(Get(iUid)),
+                    Diamonds = NullIfBlank(Get(iDiamonds)),
+                    GoLiveDays = NullIfBlank(Get(iGoLive)),
+                    Manager = NullIfBlank(Get(iManager)),
+                    Promote = NullIfBlank(Get(iPromote)),
+                    Notes = NullIfBlank(Get(iNotes)),
+                });
+            }
+
+            return true;
+        }
+
+        private static string? NullIfBlank(string s)
+            => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+        private static IEnumerable<string> ReadCsvLines(string csv)
+        {
+            using var sr = new StringReader(csv);
+            string? line;
+            while ((line = sr.ReadLine()) != null)
+                yield return line;
+        }
+
+        // Simple CSV splitter: quoted fields + escaped quotes ("")
+        private static List<string> SplitCsvLine(string line)
+        {
+            var result = new List<string>();
+            var sb = new StringBuilder();
+            bool inQuotes = false;
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+
+                if (c == '"')
+                {
+                    if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        sb.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                    }
+                }
+                else if (c == ',' && !inQuotes)
+                {
+                    result.Add(sb.ToString().Trim());
+                    sb.Clear();
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+
+            result.Add(sb.ToString().Trim());
+            return result;
         }
     }
 }
