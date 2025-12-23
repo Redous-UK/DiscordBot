@@ -2,36 +2,59 @@
 using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using MyDiscordBot.Guards;
 
 namespace MyDiscordBot.Commands
 {
+    // -------------------- Agency Guild Guard --------------------
     internal static class GuildGuards
     {
-        public static ulong AgencyGuildId { get; } =
-            ulong.TryParse(Environment.GetEnvironmentVariable("AGENCY_GUILD_ID"), out var id) ? id : 0;
+        private static readonly HashSet<ulong> AgencyGuildIds = LoadAgencyGuildIds();
 
         public static bool IsAgencyGuild(ulong guildId)
-            => AgencyGuildId != 0 && guildId == AgencyGuildId;
+            => AgencyGuildIds.Count > 0 && AgencyGuildIds.Contains(guildId);
+
+        private static HashSet<ulong> LoadAgencyGuildIds()
+        {
+            var raw =
+                Environment.GetEnvironmentVariable("AGENCY_GUILD_IDS") ??
+                Environment.GetEnvironmentVariable("AGENCY_GUILD_ID");
+
+            var set = new HashSet<ulong>();
+            if (string.IsNullOrWhiteSpace(raw))
+                return set;
+
+            foreach (var token in raw.Split(
+                         new[] { ',', ' ', ';', '\t', '\n', '\r' },
+                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (ulong.TryParse(token, out var id) && id != 0)
+                    set.Add(id);
+            }
+
+            return set;
+        }
     }
 
+    // -------------------- Models --------------------
     internal sealed class CreatorProfile
     {
-        public string Handle { get; set; } = "";       // @handle
-        public string DisplayName { get; set; } = "";  // nice name
-        public string TiktokUid { get; set; } = "";    // optional
-        public string Region { get; set; } = "";       // optional
-        public string Notes { get; set; } = "";        // optional
+        public string Handle { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string TiktokUid { get; set; } = "";
+        public string Region { get; set; } = "";
+        public string Notes { get; set; } = "";
 
         public DateTimeOffset AddedAtUtc { get; set; } = DateTimeOffset.UtcNow;
         public ulong AddedByDiscordUserId { get; set; }
     }
 
+    // -------------------- Store --------------------
     internal sealed class CreatorStore
     {
         private readonly string _path;
@@ -47,11 +70,7 @@ namespace MyDiscordBot.Commands
         public CreatorStore(string path)
         {
             _path = path;
-
-            var dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrWhiteSpace(dir))
-                Directory.CreateDirectory(dir);
-
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
             if (!File.Exists(_path))
                 File.WriteAllText(_path, "[]");
         }
@@ -60,8 +79,9 @@ namespace MyDiscordBot.Commands
         {
             lock (_lock)
             {
-                var json = File.ReadAllText(_path);
-                return JsonSerializer.Deserialize<List<CreatorProfile>>(json, JsonOpts) ?? new List<CreatorProfile>();
+                return JsonSerializer.Deserialize<List<CreatorProfile>>(
+                           File.ReadAllText(_path), JsonOpts)
+                       ?? new List<CreatorProfile>();
             }
         }
 
@@ -70,12 +90,7 @@ namespace MyDiscordBot.Commands
             lock (_lock)
             {
                 var tmp = _path + ".tmp";
-                var bak = _path + ".bak";
-
                 File.WriteAllText(tmp, JsonSerializer.Serialize(creators, JsonOpts));
-                if (File.Exists(_path))
-                    File.Copy(_path, bak, overwrite: true);
-
                 File.Copy(tmp, _path, overwrite: true);
                 File.Delete(tmp);
             }
@@ -89,8 +104,7 @@ namespace MyDiscordBot.Commands
 
         public static string NormalizeHandle(string handle)
         {
-            handle = (handle ?? "").Trim();
-            if (handle.Length == 0) return "@";
+            handle = handle.Trim();
             if (!handle.StartsWith("@")) handle = "@" + handle;
             return handle.ToLowerInvariant();
         }
@@ -102,25 +116,26 @@ namespace MyDiscordBot.Commands
             new CreatorStore(Environment.GetEnvironmentVariable("CREATOR_STORE_PATH") ?? "data/creators.json");
     }
 
+    // -------------------- Command --------------------
     public class CreatorCommand : ILegacyCommand
     {
         public string Name => "creator";
-        public string Description => "Agency creator commands (info/list/add/remove).";
+        public string Description => "Agency creator management commands.";
         public string Category => "⚙️ Settings & Config";
-        public string Usage => "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [region=] [notes=] | !creator remove <@handle>";
+        public string Usage =>
+            "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [region=] [notes=] | !creator remove <@handle>";
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
-            // Hard-lock to only the agency server
             if (message.Channel is not SocketGuildChannel gch)
             {
-                await message.Channel.SendMessageAsync("❌ This command can only be used in the agency server.");
+                await message.Channel.SendMessageAsync("❌ This command can only be used in a server.");
                 return;
             }
 
             if (!GuildGuards.IsAgencyGuild(gch.Guild.Id))
             {
-                await message.Channel.SendMessageAsync("❌ Agency commands are only available in the agency server.");
+                await message.Channel.SendMessageAsync("❌ This is not an agency guild.");
                 return;
             }
 
@@ -138,27 +153,33 @@ namespace MyDiscordBot.Commands
                 case "info":
                     await Info(message, rest);
                     break;
+
                 case "list":
                     await List(message);
                     break;
+
                 case "add":
                     await Add(message, gch, rest);
                     break;
+
                 case "remove":
                 case "delete":
                     await Remove(message, gch, rest);
                     break;
+
                 default:
                     await message.Channel.SendMessageAsync($"Unknown subcommand `{sub}`.\nUsage: `{Usage}`");
                     break;
             }
         }
 
-        private static bool IsAdmin(SocketGuildChannel gch, SocketUser author)
+        private static bool IsAdmin(SocketGuildChannel gch, SocketUser user)
         {
-            var member = gch.GetUser(author.Id);
+            var member = gch.GetUser(user.Id);
             return member != null && member.GuildPermissions.Administrator;
         }
+
+        // -------------------- Subcommands --------------------
 
         private static async Task Info(SocketMessage message, string[] args)
         {
@@ -168,12 +189,10 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var handle = args[0];
-            var c = BotStores.Creators.FindByHandle(handle);
-
+            var c = BotStores.Creators.FindByHandle(args[0]);
             if (c == null)
             {
-                await message.Channel.SendMessageAsync($"Couldn’t find {CreatorStore.NormalizeHandle(handle)}.");
+                await message.Channel.SendMessageAsync("❌ Creator not found.");
                 return;
             }
 
@@ -182,29 +201,29 @@ namespace MyDiscordBot.Commands
                 $"UID: {(string.IsNullOrWhiteSpace(c.TiktokUid) ? "—" : c.TiktokUid)}\n" +
                 $"Region: {(string.IsNullOrWhiteSpace(c.Region) ? "—" : c.Region)}\n" +
                 $"Notes: {(string.IsNullOrWhiteSpace(c.Notes) ? "—" : c.Notes)}\n" +
-                $"Added: {c.AddedAtUtc:yyyy-MM-dd} (by <@{c.AddedByDiscordUserId}>)"
+                $"Added: {c.AddedAtUtc:yyyy-MM-dd} by <@{c.AddedByDiscordUserId}>"
             );
         }
 
         private static async Task List(SocketMessage message)
         {
             var all = BotStores.Creators.LoadAll()
-                .OrderBy(c => CreatorStore.NormalizeHandle(c.Handle))
+                .OrderBy(c => c.Handle)
                 .ToList();
 
             if (all.Count == 0)
             {
-                await message.Channel.SendMessageAsync("No creators saved yet. Use `!creator add ...`");
+                await message.Channel.SendMessageAsync("No creators saved.");
                 return;
             }
 
             var lines = all.Take(50).Select(c => $"{c.Handle} — {c.DisplayName}");
-            var msg = "**Creators (first 50):**\n" + string.Join("\n", lines);
+            var text = "**Creators:**\n" + string.Join("\n", lines);
 
             if (all.Count > 50)
-                msg += $"\n…and {all.Count - 50} more.";
+                text += $"\n…and {all.Count - 50} more.";
 
-            await message.Channel.SendMessageAsync(msg);
+            await message.Channel.SendMessageAsync(text);
         }
 
         private static async Task Add(SocketMessage message, SocketGuildChannel gch, string[] args)
@@ -215,34 +234,34 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            // !creator add @handle "Display Name" uid=123 region=UK notes="..."
             if (args.Length < 2)
             {
-                await message.Channel.SendMessageAsync("Usage: `!creator add <@handle> <displayName> [uid=] [region=] [notes=]`");
+                await message.Channel.SendMessageAsync(
+                    "Usage: `!creator add <@handle> <displayName> [uid=] [region=] [notes=]`");
                 return;
             }
 
             var handle = CreatorStore.NormalizeHandle(args[0]);
             var displayName = args[1].Trim('"');
 
-            string uid = "";
-            string region = "";
-            string notes = "";
+            var uid = "";
+            var region = "";
+            var notes = "";
 
             foreach (var a in args.Skip(2))
             {
                 if (a.StartsWith("uid=", StringComparison.OrdinalIgnoreCase))
-                    uid = a.Substring(4).Trim('"');
+                    uid = a[4..];
                 else if (a.StartsWith("region=", StringComparison.OrdinalIgnoreCase))
-                    region = a.Substring(7).Trim('"');
+                    region = a[7..];
                 else if (a.StartsWith("notes=", StringComparison.OrdinalIgnoreCase))
-                    notes = a.Substring(6).Trim('"');
+                    notes = a[6..].Trim('"');
             }
 
             var all = BotStores.Creators.LoadAll();
             if (all.Any(c => CreatorStore.NormalizeHandle(c.Handle) == handle))
             {
-                await message.Channel.SendMessageAsync($"That handle already exists: {handle}");
+                await message.Channel.SendMessageAsync("❌ That creator already exists.");
                 return;
             }
 
@@ -253,8 +272,7 @@ namespace MyDiscordBot.Commands
                 TiktokUid = uid,
                 Region = region,
                 Notes = notes,
-                AddedByDiscordUserId = message.Author.Id,
-                AddedAtUtc = DateTimeOffset.UtcNow
+                AddedByDiscordUserId = message.Author.Id
             });
 
             BotStores.Creators.SaveAll(all);
@@ -281,7 +299,7 @@ namespace MyDiscordBot.Commands
 
             if (removed == 0)
             {
-                await message.Channel.SendMessageAsync($"No match for {handle}.");
+                await message.Channel.SendMessageAsync("❌ Creator not found.");
                 return;
             }
 
