@@ -1,20 +1,16 @@
-﻿// Commands/CreatorCommand.cs
-// Agency creator command (legacy ILegacyCommand style) restricted to one guild via AGENCY_GUILD_ID.
-// Stores creator profiles in a JSON file (CREATOR_STORE_PATH or data/creators.json).
-
+﻿using Discord;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
-using Discord;
-// using Discord.WebSocket;
 
 namespace MyDiscordBot.Commands
 {
-    // ---------- Guild Lock Helper ----------
     internal static class GuildGuards
     {
         public static ulong AgencyGuildId { get; } =
@@ -24,21 +20,19 @@ namespace MyDiscordBot.Commands
             => AgencyGuildId != 0 && guildId == AgencyGuildId;
     }
 
-    // ---------- Model ----------
-    internal class CreatorProfile
+    internal sealed class CreatorProfile
     {
-        public string Handle { get; set; } = "";      // e.g. @jenna
-        public string DisplayName { get; set; } = ""; // e.g. Jenna
-        public string TiktokUid { get; set; } = "";   // optional
-        public string Region { get; set; } = "";      // optional
-        public string Notes { get; set; } = "";       // internal notes
+        public string Handle { get; set; } = "";       // @handle
+        public string DisplayName { get; set; } = "";  // nice name
+        public string TiktokUid { get; set; } = "";    // optional
+        public string Region { get; set; } = "";       // optional
+        public string Notes { get; set; } = "";        // optional
 
         public DateTimeOffset AddedAtUtc { get; set; } = DateTimeOffset.UtcNow;
         public ulong AddedByDiscordUserId { get; set; }
     }
 
-    // ---------- JSON Store ----------
-    internal class CreatorStore
+    internal sealed class CreatorStore
     {
         private readonly string _path;
         private readonly object _lock = new();
@@ -46,6 +40,7 @@ namespace MyDiscordBot.Commands
         private static readonly JsonSerializerOptions JsonOpts = new()
         {
             WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
@@ -58,7 +53,7 @@ namespace MyDiscordBot.Commands
                 Directory.CreateDirectory(dir);
 
             if (!File.Exists(_path))
-                File.WriteAllText(_path, "[/data/creators.json]");
+                File.WriteAllText(_path, "[]");
         }
 
         public List<CreatorProfile> LoadAll()
@@ -78,12 +73,9 @@ namespace MyDiscordBot.Commands
                 var bak = _path + ".bak";
 
                 File.WriteAllText(tmp, JsonSerializer.Serialize(creators, JsonOpts));
-
-                // Backup existing file
                 if (File.Exists(_path))
                     File.Copy(_path, bak, overwrite: true);
 
-                // Atomic-ish replace
                 File.Copy(tmp, _path, overwrite: true);
                 File.Delete(tmp);
             }
@@ -104,53 +96,37 @@ namespace MyDiscordBot.Commands
         }
     }
 
-    // ---------- Bot Store Singleton ----------
     internal static class BotStores
     {
         public static readonly CreatorStore Creators =
             new CreatorStore(Environment.GetEnvironmentVariable("CREATOR_STORE_PATH") ?? "data/creators.json");
     }
 
-    // ---------- Command ----------
-    // Assumes you have:
-    // interface ILegacyCommand { string Name {get;} string Description {get;} string Usage {get;} Task ExecuteAsync(LegacyCommandContext context); }
-    // and LegacyCommandContext has at least:
-    // - Guild (nullable) with Id
-    // - Channel with SendMessageAsync(string)
-    // - User with Id
-    // - Args string[]
-    // - A boolean permission helper like UserHasAdministrator (or replace IsAdmin logic)
     public class CreatorCommand : ILegacyCommand
     {
         public string Name => "creator";
         public string Description => "Agency creator commands (info/list/add/remove).";
+        public string Category => "⚙️ Settings & Config";
+        public string Usage => "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [region=] [notes=] | !creator remove <@handle>";
 
-        public string Category => "🛠️ Agency Management";
-        public string Usage => "!creator info <handle> | !creator list | !creator add <handle> <displayName> [uid=] [region=] [notes=] | !creator remove <handle>";
-
-        private readonly CreatorStore _store;
-
-        // Default constructor for auto-discovery systems using Activator.CreateInstance
-        public CreatorCommand() : this(BotStores.Creators) { }
-
-        public CreatorCommand(CreatorStore store)
+        public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
-            _store = store;
-        }
-
-        public async Task ExecuteAsync(LegacyCommandContext context)
-        {
-            // ✅ Hard lock to agency guild only
-            if (context.Guild == null || !GuildGuards.IsAgencyGuild(context.Guild.Id))
+            // Hard-lock to only the agency server
+            if (message.Channel is not SocketGuildChannel gch)
             {
-                await context.Channel.SendMessageAsync("❌ Agency commands are only available in the agency server.");
+                await message.Channel.SendMessageAsync("❌ This command can only be used in the agency server.");
                 return;
             }
 
-            var args = context.Args ?? Array.Empty<string>();
+            if (!GuildGuards.IsAgencyGuild(gch.Guild.Id))
+            {
+                await message.Channel.SendMessageAsync("❌ Agency commands are only available in the agency server.");
+                return;
+            }
+
             if (args.Length == 0)
             {
-                await context.Channel.SendMessageAsync($"Usage: {Usage}");
+                await message.Channel.SendMessageAsync($"Usage: `{Usage}`");
                 return;
             }
 
@@ -160,46 +136,48 @@ namespace MyDiscordBot.Commands
             switch (sub)
             {
                 case "info":
-                    await Info(context, rest);
+                    await Info(message, rest);
                     break;
-
                 case "list":
-                    await List(context);
+                    await List(message);
                     break;
-
                 case "add":
-                    await Add(context, rest);
+                    await Add(message, gch, rest);
                     break;
-
                 case "remove":
                 case "delete":
-                    await Remove(context, rest);
+                    await Remove(message, gch, rest);
                     break;
-
                 default:
-                    await context.Channel.SendMessageAsync($"Unknown subcommand `{sub}`.\nUsage: {Usage}");
+                    await message.Channel.SendMessageAsync($"Unknown subcommand `{sub}`.\nUsage: `{Usage}`");
                     break;
             }
         }
 
-        private async Task Info(LegacyCommandContext ctx, string[] args)
+        private static bool IsAdmin(SocketGuildChannel gch, SocketUser author)
+        {
+            var member = gch.GetUser(author.Id);
+            return member != null && member.GuildPermissions.Administrator;
+        }
+
+        private static async Task Info(SocketMessage message, string[] args)
         {
             if (args.Length < 1)
             {
-                await ctx.Channel.SendMessageAsync("Usage: !creator info <handle>");
+                await message.Channel.SendMessageAsync("Usage: `!creator info <@handle>`");
                 return;
             }
 
             var handle = args[0];
-            var c = _store.FindByHandle(handle);
+            var c = BotStores.Creators.FindByHandle(handle);
 
             if (c == null)
             {
-                await ctx.Channel.SendMessageAsync($"Couldn’t find {CreatorStore.NormalizeHandle(handle)}.");
+                await message.Channel.SendMessageAsync($"Couldn’t find {CreatorStore.NormalizeHandle(handle)}.");
                 return;
             }
 
-            await ctx.Channel.SendMessageAsync(
+            await message.Channel.SendMessageAsync(
                 $"**{c.DisplayName}** ({c.Handle})\n" +
                 $"UID: {(string.IsNullOrWhiteSpace(c.TiktokUid) ? "—" : c.TiktokUid)}\n" +
                 $"Region: {(string.IsNullOrWhiteSpace(c.Region) ? "—" : c.Region)}\n" +
@@ -208,52 +186,39 @@ namespace MyDiscordBot.Commands
             );
         }
 
-        private async Task List(LegacyCommandContext ctx)
+        private static async Task List(SocketMessage message)
         {
-            var all = _store.LoadAll()
+            var all = BotStores.Creators.LoadAll()
                 .OrderBy(c => CreatorStore.NormalizeHandle(c.Handle))
                 .ToList();
 
             if (all.Count == 0)
             {
-                await ctx.Channel.SendMessageAsync("No creators saved yet. Use `!creator add ...`");
+                await message.Channel.SendMessageAsync("No creators saved yet. Use `!creator add ...`");
                 return;
             }
 
-            // Keep message length safe:
             var lines = all.Take(50).Select(c => $"{c.Handle} — {c.DisplayName}");
             var msg = "**Creators (first 50):**\n" + string.Join("\n", lines);
 
             if (all.Count > 50)
                 msg += $"\n…and {all.Count - 50} more.";
 
-            await ctx.Channel.SendMessageAsync(msg);
+            await message.Channel.SendMessageAsync(msg);
         }
 
-        private bool IsAdmin(LegacyCommandContext ctx)
+        private static async Task Add(SocketMessage message, SocketGuildChannel gch, string[] args)
         {
-            // ✅ Replace with your actual permission check.
-            // Common patterns in your bot:
-            // - ctx.UserHasAdministrator
-            // - ctx.HasPermission(GuildPermission.Administrator)
-            // - ((SocketGuildUser)ctx.User).GuildPermissions.Administrator
-
-            return ctx.UserHasAdministrator;
-        }
-
-        private async Task Add(LegacyCommandContext ctx, string[] args)
-        {
-            if (!IsAdmin(ctx))
+            if (!IsAdmin(gch, message.Author))
             {
-                await ctx.Channel.SendMessageAsync("❌ Admin only.");
+                await message.Channel.SendMessageAsync("🚫 Admins only.");
                 return;
             }
 
-            // Example:
-            // !creator add @handle "Display Name" uid=123 region=UK notes="Great engagement"
+            // !creator add @handle "Display Name" uid=123 region=UK notes="..."
             if (args.Length < 2)
             {
-                await ctx.Channel.SendMessageAsync("Usage: !creator add <handle> <displayName> [uid=] [region=] [notes=]");
+                await message.Channel.SendMessageAsync("Usage: `!creator add <@handle> <displayName> [uid=] [region=] [notes=]`");
                 return;
             }
 
@@ -274,10 +239,10 @@ namespace MyDiscordBot.Commands
                     notes = a.Substring(6).Trim('"');
             }
 
-            var all = _store.LoadAll();
+            var all = BotStores.Creators.LoadAll();
             if (all.Any(c => CreatorStore.NormalizeHandle(c.Handle) == handle))
             {
-                await ctx.Channel.SendMessageAsync($"That handle already exists: {handle}");
+                await message.Channel.SendMessageAsync($"That handle already exists: {handle}");
                 return;
             }
 
@@ -288,54 +253,40 @@ namespace MyDiscordBot.Commands
                 TiktokUid = uid,
                 Region = region,
                 Notes = notes,
-                AddedByDiscordUserId = ctx.User.Id,
+                AddedByDiscordUserId = message.Author.Id,
                 AddedAtUtc = DateTimeOffset.UtcNow
             });
 
-            _store.SaveAll(all);
-            await ctx.Channel.SendMessageAsync($"✅ Added {handle} (**{displayName}**).");
+            BotStores.Creators.SaveAll(all);
+            await message.Channel.SendMessageAsync($"✅ Added {handle} (**{displayName}**).");
         }
 
-        private async Task Remove(LegacyCommandContext ctx, string[] args)
+        private static async Task Remove(SocketMessage message, SocketGuildChannel gch, string[] args)
         {
-            if (!IsAdmin(ctx))
+            if (!IsAdmin(gch, message.Author))
             {
-                await ctx.Channel.SendMessageAsync("❌ Admin only.");
+                await message.Channel.SendMessageAsync("🚫 Admins only.");
                 return;
             }
 
             if (args.Length < 1)
             {
-                await ctx.Channel.SendMessageAsync("Usage: !creator remove <handle>");
+                await message.Channel.SendMessageAsync("Usage: `!creator remove <@handle>`");
                 return;
             }
 
             var handle = CreatorStore.NormalizeHandle(args[0]);
-            var all = _store.LoadAll();
+            var all = BotStores.Creators.LoadAll();
             var removed = all.RemoveAll(c => CreatorStore.NormalizeHandle(c.Handle) == handle);
 
             if (removed == 0)
             {
-                await ctx.Channel.SendMessageAsync($"No match for {handle}.");
+                await message.Channel.SendMessageAsync($"No match for {handle}.");
                 return;
             }
 
-            _store.SaveAll(all);
-            await ctx.Channel.SendMessageAsync($"✅ Removed {handle}.");
+            BotStores.Creators.SaveAll(all);
+            await message.Channel.SendMessageAsync($"✅ Removed {handle}.");
         }
-    }
-
-    // ---------- Placeholder Interfaces (REMOVE if you already have these) ----------
-    // These are ONLY here so the file is copy-paste complete. Delete them if your project already defines them.
-
-    public class LegacyCommandContext
-    {
-        public dynamic? Guild { get; set; }          // expects Guild.Id
-        public dynamic Channel { get; set; } = default!; // expects SendMessageAsync(string)
-        public dynamic User { get; set; } = default!;    // expects User.Id
-        public string[] Args { get; set; } = Array.Empty<string>();
-
-        // Replace this with your real permission signal
-        public bool UserHasAdministrator { get; set; }
     }
 }
