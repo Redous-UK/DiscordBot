@@ -53,6 +53,7 @@ namespace MyDiscordBot
         private static readonly string DataDir = ResolveDataDir();
         private static readonly string SettingsFile = Path.Combine(DataDir, "guild-settings.json");
         private static readonly string BirthdaysFile = Path.Combine(DataDir, "birthdays.json");
+        private static readonly string CreatorsFile = Path.Combine(DataDir, "creators.json");
         private static readonly object _settingsSync = new();
 
         public static Bot BotInstance { get; private set; } = null!;
@@ -130,6 +131,7 @@ namespace MyDiscordBot
             _client.Ready -= OnClientReadyOnce;
 
             Console.WriteLine("[READY] init start");
+            Console.WriteLine($"[creators] using store: {CreatorsFile}");
 
             EnsureDataDir();
             LoadSettings();
