@@ -14,7 +14,7 @@ using MyDiscordBot.Guards;
 namespace MyDiscordBot.Commands
 {
     // -------------------- Models --------------------
-    internal sealed class CreatorProfile
+    public sealed class CreatorProfile
     {
         public string Handle { get; set; } = "";
         public string DisplayName { get; set; } = "";
@@ -30,7 +30,8 @@ namespace MyDiscordBot.Commands
     }
 
     // -------------------- Store --------------------
-    internal sealed class CreatorStore
+    // NOTE: If you move CreatorStore to a dedicated file/namespace later, keep it public.
+    public sealed class CreatorStore
     {
         private readonly string _path;
         private readonly object _lock = new();
@@ -79,16 +80,11 @@ namespace MyDiscordBot.Commands
 
         public static string NormalizeHandle(string handle)
         {
-            handle = handle.Trim();
+            handle = (handle ?? "").Trim();
+            if (handle.Length == 0) return "@";
             if (!handle.StartsWith("@")) handle = "@" + handle;
             return handle.ToLowerInvariant();
         }
-    }
-
-    internal static class BotStores
-    {
-        public static readonly CreatorStore Creators =
-            new CreatorStore(Environment.GetEnvironmentVariable("CREATOR_STORE_PATH") ?? "data/creators.json");
     }
 
     // -------------------- Command --------------------
@@ -98,8 +94,8 @@ namespace MyDiscordBot.Commands
         public string Description => "Agency creator management commands.";
         public string Category => "⚙️ Settings & Config";
         public string Usage =>
-            "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [goLiveDays=] [Manager=] [Promote=] [notes=] | !creator remove <@handle> | !creator import (attach CSV)";
-        
+            "!creator info <@handle> | !creator list | !creator add <@handle> <displayName> [uid=] [diamonds=] [golivedays=] [manager=] [promote=] [notes=] | !creator remove <@handle> | !creator import (attach CSV)";
+
         private static readonly HttpClient _http = new HttpClient();
 
         public async Task ExecuteAsync(SocketMessage message, string[] args)
@@ -110,7 +106,6 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            // ✅ Uses your shared guard: MyDiscordBot.Guards.GuildGuards
             if (!GuildGuards.IsAgencyGuild(gch.Guild.Id))
             {
                 await message.Channel.SendMessageAsync("❌ This is not an agency guild.");
@@ -123,30 +118,33 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
+            // ✅ IMPORTANT: use the single persistent store created in Bot.cs
+            var store = Bot.BotInstance.CreatorStore;
+
             var sub = args[0].ToLowerInvariant();
             var rest = args.Skip(1).ToArray();
 
             switch (sub)
             {
                 case "info":
-                    await Info(message, rest);
+                    await Info(message, store, rest);
                     break;
 
                 case "list":
-                    await List(message);
+                    await List(message, store);
                     break;
 
                 case "add":
-                    await Add(message, gch, rest);
+                    await Add(message, gch, store, rest);
                     break;
 
                 case "remove":
                 case "delete":
-                    await Remove(message, gch, rest);
+                    await Remove(message, gch, store, rest);
                     break;
 
                 case "import":
-                    await ImportCsv(message, gch);
+                    await ImportCsv(message, gch, store);
                     break;
 
                 default:
@@ -163,7 +161,7 @@ namespace MyDiscordBot.Commands
 
         // -------------------- Subcommands --------------------
 
-        private static async Task Info(SocketMessage message, string[] args)
+        private static async Task Info(SocketMessage message, CreatorStore store, string[] args)
         {
             if (args.Length < 1)
             {
@@ -171,14 +169,13 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var c = BotStores.Creators.FindByHandle(args[0]);
+            var c = store.FindByHandle(args[0]);
             if (c == null)
             {
                 await message.Channel.SendMessageAsync("❌ Creator not found.");
                 return;
             }
 
-            // Optional: clickable TikTok link in the title
             var normalizedHandle = c.Handle.StartsWith("@") ? c.Handle : "@" + c.Handle;
             var tiktokUrl = $"https://www.tiktok.com/{normalizedHandle}";
 
@@ -198,11 +195,9 @@ namespace MyDiscordBot.Commands
             await message.Channel.SendMessageAsync(embed: embed);
         }
 
-        private static async Task List(SocketMessage message)
+        private static async Task List(SocketMessage message, CreatorStore store)
         {
-            var all = BotStores.Creators.LoadAll()
-                .OrderBy(c => c.Handle)
-                .ToList();
+            var all = store.LoadAll().OrderBy(c => c.Handle).ToList();
 
             if (all.Count == 0)
             {
@@ -219,7 +214,7 @@ namespace MyDiscordBot.Commands
             await message.Channel.SendMessageAsync(text);
         }
 
-        private static async Task Add(SocketMessage message, SocketGuildChannel gch, string[] args)
+        private static async Task Add(SocketMessage message, SocketGuildChannel gch, CreatorStore store, string[] args)
         {
             if (!IsAdmin(gch, message.Author))
             {
@@ -230,7 +225,7 @@ namespace MyDiscordBot.Commands
             if (args.Length < 2)
             {
                 await message.Channel.SendMessageAsync(
-                    "Usage: `!creator add <@handle> <displayName> [uid=] [goLiveDays=] [Manager=] [Promote=] [notes=]`");
+                    "Usage: `!creator add <@handle> <displayName> [uid=] [diamonds=] [golivedays=] [manager=] [promote=] [notes=]`");
                 return;
             }
 
@@ -249,9 +244,9 @@ namespace MyDiscordBot.Commands
                 if (a.StartsWith("uid=", StringComparison.OrdinalIgnoreCase))
                     uid = a[4..];
                 else if (a.StartsWith("diamonds=", StringComparison.OrdinalIgnoreCase))
-                    diamonds = a[7..];
+                    diamonds = a[9..];
                 else if (a.StartsWith("golivedays=", StringComparison.OrdinalIgnoreCase))
-                    goLiveDays = a[12..];
+                    goLiveDays = a[10..];
                 else if (a.StartsWith("manager=", StringComparison.OrdinalIgnoreCase))
                     manager = a[8..].Trim('"');
                 else if (a.StartsWith("promote=", StringComparison.OrdinalIgnoreCase))
@@ -260,7 +255,7 @@ namespace MyDiscordBot.Commands
                     notes = a[6..].Trim('"');
             }
 
-            var all = BotStores.Creators.LoadAll();
+            var all = store.LoadAll();
             if (all.Any(c => CreatorStore.NormalizeHandle(c.Handle) == handle))
             {
                 await message.Channel.SendMessageAsync("❌ That creator already exists.");
@@ -281,11 +276,11 @@ namespace MyDiscordBot.Commands
                 AddedAtUtc = DateTimeOffset.UtcNow
             });
 
-            BotStores.Creators.SaveAll(all);
+            store.SaveAll(all);
             await message.Channel.SendMessageAsync($"✅ Added {handle} (**{displayName}**).");
         }
 
-        private static async Task Remove(SocketMessage message, SocketGuildChannel gch, string[] args)
+        private static async Task Remove(SocketMessage message, SocketGuildChannel gch, CreatorStore store, string[] args)
         {
             if (!IsAdmin(gch, message.Author))
             {
@@ -300,7 +295,7 @@ namespace MyDiscordBot.Commands
             }
 
             var handle = CreatorStore.NormalizeHandle(args[0]);
-            var all = BotStores.Creators.LoadAll();
+            var all = store.LoadAll();
             var removed = all.RemoveAll(c => CreatorStore.NormalizeHandle(c.Handle) == handle);
 
             if (removed == 0)
@@ -309,13 +304,13 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            BotStores.Creators.SaveAll(all);
+            store.SaveAll(all);
             await message.Channel.SendMessageAsync($"✅ Removed {handle}.");
         }
 
         // -------------------- CSV Import --------------------
 
-        private static async Task ImportCsv(SocketMessage message, SocketGuildChannel gch)
+        private static async Task ImportCsv(SocketMessage message, SocketGuildChannel gch, CreatorStore store)
         {
             if (!IsAdmin(gch, message.Author))
             {
@@ -329,8 +324,8 @@ namespace MyDiscordBot.Commands
                 await message.Channel.SendMessageAsync(
                     "Attach a CSV file to the same message.\n" +
                     "Usage: `!creator import` (with a `.csv` attached)\n\n" +
-                    "Required header: `handle`\n" +
-                    "Optional: `displayName,tiktokUid,diamonds,GoLiveDays,Manager,Promote,notes`");
+                    "Expected headers (TikTok export supported):\n" +
+                    "- `Creator's username`\n- `Creator ID:`\n- `Diamonds in L30D`\n- `Valid go LIVE days in L30D`\n- `Creator Network manager`\n- `Promote permission`\n- `Notes`");
                 return;
             }
 
@@ -364,7 +359,6 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            var store = BotStores.Creators;
             var all = store.LoadAll();
 
             int added = 0, updated = 0, skipped = 0;
@@ -385,7 +379,7 @@ namespace MyDiscordBot.Commands
                     all.Add(new CreatorProfile
                     {
                         Handle = norm,
-                        DisplayName = r.DisplayName ?? "",
+                        DisplayName = r.DisplayName ?? norm,
                         TiktokUid = r.TiktokUid ?? "",
                         Diamonds = r.Diamonds ?? "",
                         GoLiveDays = r.GoLiveDays ?? "",
@@ -419,8 +413,7 @@ namespace MyDiscordBot.Commands
                 $"- Added: **{added}**\n" +
                 $"- Updated: **{updated}**\n" +
                 $"- Skipped: **{skipped}**\n" +
-                $"- Total creators now: **{all.Count}**"
-            );
+                $"- Total creators now: **{all.Count}**");
         }
 
         private sealed class ImportRow
@@ -456,10 +449,11 @@ namespace MyDiscordBot.Commands
 
             int Idx(string name) => header.FindIndex(h => string.Equals(h, name, StringComparison.OrdinalIgnoreCase));
 
+            // TikTok export headers (as in your current file)
             var iHandle = Idx("Creator's username");
             if (iHandle < 0)
             {
-                error = "Header must include a `handle` column.";
+                error = "Missing required column: Creator's username";
                 return false;
             }
 

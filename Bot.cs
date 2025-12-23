@@ -33,6 +33,7 @@ namespace MyDiscordBot
 
         // --- Services ---
         public BotServices Services { get; }
+        public CreatorStore CreatorStore { get; private set; } = null!;
 
         public Bot(ReminderService reminderService)
         {
@@ -57,7 +58,7 @@ namespace MyDiscordBot
         private static readonly object _settingsSync = new();
 
         public static Bot BotInstance { get; private set; } = null!;
-        
+
         public DiscordSocketClient GetClient() => _client;
         public List<ILegacyCommand> GetAllLegacyCommands() => _legacyCommands.Values.ToList();
 
@@ -96,24 +97,11 @@ namespace MyDiscordBot
             _client.JoinedGuild += g => { Console.WriteLine($"[GUILD] Joined: {g.Name} ({g.Id})"); return Task.CompletedTask; };
             _client.LeftGuild += g => { Console.WriteLine($"[GUILD] Left: {g.Name} ({g.Id})"); return Task.CompletedTask; };
 
-
-
             // single-run init
             _client.Ready += OnClientReadyOnce;
 
             await _client.LoginAsync(TokenType.Bot, _token);
             await _client.StartAsync();
-
-            _client.Ready += () =>
-            {
-                // optional simple logger
-                void Log(string s) => Console.WriteLine($"[reminders] {s}");
-                ReminderDispatcher.Start(_client, Program.BotInstance.Services.Reminders, Log);
-                return Task.CompletedTask;
-            };
-
-
-
 
             // keep alive
             await Task.Delay(Timeout.Infinite);
@@ -131,11 +119,20 @@ namespace MyDiscordBot
             _client.Ready -= OnClientReadyOnce;
 
             Console.WriteLine("[READY] init start");
-            Console.WriteLine($"[creators] using store: {CreatorsFile}");
 
             EnsureDataDir();
+
+            // ✅ CRITICAL: instantiate CreatorStore ONCE, using the persistent disk path
+            CreatorStore = new CreatorStore(CreatorsFile);
+            Console.WriteLine(
+                $"[creators] using store: {CreatorsFile} " +
+                $"exists={File.Exists(CreatorsFile)} " +
+                $"size={(File.Exists(CreatorsFile) ? new FileInfo(CreatorsFile).Length : 0)} bytes"
+            );
+
             LoadSettings();
             Console.WriteLine($"[settings] using file: {SettingsFile}");
+
             LoadLegacyCommandsOnce();
 
             foreach (var guild in _client.Guilds)
@@ -160,9 +157,18 @@ namespace MyDiscordBot
                 _ = RepeatBirthdayCheck();
             }
 
-            Console.WriteLine("[READY] init end");
+            // ✅ Wire join/leave announcements (your existing hook)
             MemberEvents.Wire(_client, Services.GuildSettings, s => Console.WriteLine($"[leave-events] {s}"));
 
+            // ✅ Start reminders dispatcher ONCE (and fix Program.BotInstance usage)
+            // Optional gating; if you already use IS_DISPATCHER=true elsewhere, keep this.
+            if (string.Equals(Environment.GetEnvironmentVariable("IS_DISPATCHER"), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                void Log(string s) => Console.WriteLine($"[reminders] {s}");
+                ReminderDispatcher.Start(_client, BotInstance.Services.Reminders, Log);
+            }
+
+            Console.WriteLine("[READY] init end");
         }
 
         // ---------------- Command pipeline with per-guild debug logging ----------------
