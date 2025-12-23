@@ -178,16 +178,24 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            await message.Channel.SendMessageAsync(
-                $"**{c.DisplayName}** ({c.Handle})\n" +
-                $"UID: {(string.IsNullOrWhiteSpace(c.TiktokUid) ? "—" : c.TiktokUid)}\n" +
-                $"Diamonds: {(string.IsNullOrWhiteSpace(c.Diamonds) ? "—" : c.Diamonds)}\n" +
-                $"GoLiveDays: {(string.IsNullOrWhiteSpace(c.GoLiveDays) ? "—" : c.GoLiveDays)}\n" +
-                $"Manager: {(string.IsNullOrWhiteSpace(c.Manager) ? "—" : c.Manager)}\n" +
-                $"Promote: {(string.IsNullOrWhiteSpace(c.Promote) ? "—" : c.Promote)}\n" +
-                $"Notes: {(string.IsNullOrWhiteSpace(c.Notes) ? "—" : c.Notes)}\n" +
-                $"Added: {c.AddedAtUtc:yyyy-MM-dd} by <@{c.AddedByDiscordUserId}>"
-            );
+            // Optional: clickable TikTok link in the title
+            var normalizedHandle = c.Handle.StartsWith("@") ? c.Handle : "@" + c.Handle;
+            var tiktokUrl = $"https://www.tiktok.com/{normalizedHandle}";
+
+            var embed = new EmbedBuilder()
+                .WithTitle($"{c.DisplayName} ({c.Handle})")
+                .WithUrl(tiktokUrl)
+                .WithDescription("Agency Creator Profile")
+                .WithFooter($"Added {c.AddedAtUtc:yyyy-MM-dd} • By {c.AddedByDiscordUserId}")
+                .AddField("TikTok UID", string.IsNullOrWhiteSpace(c.TiktokUid) ? "—" : c.TiktokUid, inline: true)
+                .AddField("Diamonds in the last 30 Days", string.IsNullOrWhiteSpace(c.Diamonds) ? "—" : c.Diamonds, inline: true)
+                .AddField("Go Live Days in the last 30 Days", string.IsNullOrWhiteSpace(c.GoLiveDays) ? "—" : c.GoLiveDays, inline: true)
+                .AddField("Manager", string.IsNullOrWhiteSpace(c.Manager) ? "—" : c.Manager, inline: true)
+                .AddField("Promote Permission", string.IsNullOrWhiteSpace(c.Promote) ? "—" : c.Promote, inline: true)
+                .AddField("Notes", string.IsNullOrWhiteSpace(c.Notes) ? "—" : c.Notes, inline: false)
+                .Build();
+
+            await message.Channel.SendMessageAsync(embed: embed);
         }
 
         private static async Task List(SocketMessage message)
