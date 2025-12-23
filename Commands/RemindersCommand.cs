@@ -25,7 +25,7 @@ namespace MyDiscordBot.Commands
             }
 
             // Resolve the service at runtime (avoids constructor timing/null issues)
-            var reminderService = Program.BotInstance?.ReminderService;
+            var reminderService = Bot.BotInstance?.Services?.Reminders;
             if (reminderService == null)
             {
                 await message.Channel.SendMessageAsync("❌ Reminder service is not available yet. Try again in a moment.");
