@@ -32,7 +32,12 @@ namespace MyDiscordBot
         private DateTime _lastBirthdayResetDate = DateTime.MinValue;
 
         // --- Services ---
-        public ReminderService ReminderService { get; }
+        public BotServices Services { get; }
+
+        public Bot(ReminderService reminderService)
+        {
+            Services = new BotServices(reminderService);
+        }
 
         // --- Discord client & config ---
         public DiscordSocketClient _client = null!;
@@ -51,12 +56,7 @@ namespace MyDiscordBot
         private static readonly object _settingsSync = new();
 
         public static Bot BotInstance { get; private set; } = null!;
-
-        public Bot(ReminderService reminderService)
-        {
-            ReminderService = reminderService;
-        }
-
+        
         public DiscordSocketClient GetClient() => _client;
         public List<ILegacyCommand> GetAllLegacyCommands() => _legacyCommands.Values.ToList();
 
@@ -95,6 +95,8 @@ namespace MyDiscordBot
             _client.JoinedGuild += g => { Console.WriteLine($"[GUILD] Joined: {g.Name} ({g.Id})"); return Task.CompletedTask; };
             _client.LeftGuild += g => { Console.WriteLine($"[GUILD] Left: {g.Name} ({g.Id})"); return Task.CompletedTask; };
 
+
+
             // single-run init
             _client.Ready += OnClientReadyOnce;
 
@@ -105,9 +107,11 @@ namespace MyDiscordBot
             {
                 // optional simple logger
                 void Log(string s) => Console.WriteLine($"[reminders] {s}");
-                ReminderDispatcher.Start(_client, Program.BotInstance.ReminderService, Log);
+                ReminderDispatcher.Start(_client, Program.BotInstance.Services.Reminders, Log);
                 return Task.CompletedTask;
             };
+
+
 
 
             // keep alive
@@ -155,6 +159,8 @@ namespace MyDiscordBot
             }
 
             Console.WriteLine("[READY] init end");
+            MemberEvents.Wire(_client, Services.GuildSettings, s => Console.WriteLine($"[leave-events] {s}"));
+
         }
 
         // ---------------- Command pipeline with per-guild debug logging ----------------
@@ -567,7 +573,7 @@ namespace MyDiscordBot
 
         public void Dispose()
         {
-            ReminderService?.Dispose();
+            Services?.Dispose();
             _birthdayCheckGate?.Dispose();
         }
     }

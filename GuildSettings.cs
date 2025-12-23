@@ -9,5 +9,8 @@ namespace MyDiscordBot.Models
         public string Nickname { get; set; } = string.Empty;
         public ulong BirthdayChannelId { get; set; }
         public HashSet<string> LogCategories { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public ulong? LeaveAnnounceChannelId { get; set; }
+        public ulong? JoinAnnounceChannelId { get; set; }
+        
     }
 }
