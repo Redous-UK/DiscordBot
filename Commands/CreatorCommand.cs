@@ -131,7 +131,7 @@ namespace MyDiscordBot.Commands
                     break;
 
                 case "list":
-                    await List(message, store);
+                    await List(message, store, rest);
                     break;
 
                 case "add":
@@ -195,9 +195,11 @@ namespace MyDiscordBot.Commands
             await message.Channel.SendMessageAsync(embed: embed);
         }
 
-        private static async Task List(SocketMessage message, CreatorStore store)
+        private static async Task List(SocketMessage message, CreatorStore store, string[] args)
         {
-            var all = store.LoadAll().OrderBy(c => c.Handle).ToList();
+            var all = store.LoadAll()
+                .OrderBy(c => c.Handle)
+                .ToList();
 
             if (all.Count == 0)
             {
@@ -205,8 +207,39 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
+            // Optional search term(s). If none provided, show everything.
+            var query = (args == null || args.Length == 0) ? "" : string.Join(" ", args).Trim();
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                var q = query.ToLowerInvariant();
+
+                bool Match(string? s) => !string.IsNullOrWhiteSpace(s) && s.ToLowerInvariant().Contains(q);
+
+                all = all.Where(c =>
+                        Match(c.Handle) ||
+                        Match(c.DisplayName) ||
+                        Match(c.TiktokUid) ||
+                        Match(c.Diamonds) ||
+                        Match(c.GoLiveDays) ||
+                        Match(c.Manager) ||
+                        Match(c.Promote) ||
+                        Match(c.Notes))
+                    .ToList();
+            }
+
+            if (all.Count == 0)
+            {
+                await message.Channel.SendMessageAsync($"No creators matched `{query}`.");
+                return;
+            }
+
+            var header = string.IsNullOrWhiteSpace(query)
+                ? $"**Creators (showing first 50 of {all.Count}):**"
+                : $"**Creators matching `{query}` (showing first 50 of {all.Count}):**";
+
             var lines = all.Take(50).Select(c => $"{c.Handle} — {c.DisplayName}");
-            var text = "**Creators:**\n" + string.Join("\n", lines);
+            var text = header + "\n" + string.Join("\n", lines);
 
             if (all.Count > 50)
                 text += $"\n…and {all.Count - 50} more.";
