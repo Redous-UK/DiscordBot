@@ -35,9 +35,18 @@ namespace MyDiscordBot
         public BotServices Services { get; }
         public CreatorStore CreatorStore { get; private set; } = null!;
 
+        private readonly HttpClient _http;
+
         public Bot(ReminderService reminderService)
         {
-            Services = new BotServices(reminderService);
+            _http = new HttpClient();
+
+            var baseUrl = Environment.GetEnvironmentVariable("QNA_API_BASE_URL") ?? "https://example.com";
+            var apiKey = Environment.GetEnvironmentVariable("QNA_API_KEY") ?? "";
+
+            var qnaApi = new QnAApiService(_http, baseUrl, apiKey);
+
+            Services = new BotServices(reminderService, qnaApi);
         }
 
         // --- Discord client & config ---
