@@ -207,25 +207,81 @@ namespace MyDiscordBot.Commands
                 return;
             }
 
-            // Optional search term(s). If none provided, show everything.
+            // Optional search term(s). If none provided, show all (first 50).
             var query = (args == null || args.Length == 0) ? "" : string.Join(" ", args).Trim();
 
             if (!string.IsNullOrWhiteSpace(query))
             {
-                var q = query.ToLowerInvariant();
+                // Support field queries like:
+                // manager:*   -> any creator with Manager filled
+                // manager:dan -> manager contains "dan" (case-insensitive)
+                string? field = null;
+                string? value = null;
 
-                bool Match(string? s) => !string.IsNullOrWhiteSpace(s) && s.ToLowerInvariant().Contains(q);
+                var idx = query.IndexOf(':');
+                if (idx > 0)
+                {
+                    field = query.Substring(0, idx).Trim().ToLowerInvariant();
+                    value = query.Substring(idx + 1).Trim();
+                }
 
-                all = all.Where(c =>
-                        Match(c.Handle) ||
-                        Match(c.DisplayName) ||
-                        Match(c.TiktokUid) ||
-                        Match(c.Diamonds) ||
-                        Match(c.GoLiveDays) ||
-                        Match(c.Manager) ||
-                        Match(c.Promote) ||
-                        Match(c.Notes))
-                    .ToList();
+                static bool Has(string? s) => !string.IsNullOrWhiteSpace(s);
+                static bool ContainsCI(string? s, string v)
+                    => Has(s) && s!.Contains(v, StringComparison.OrdinalIgnoreCase);
+
+                if (!string.IsNullOrWhiteSpace(field))
+                {
+                    // Field mode
+                    if (value == "*")
+                    {
+                        all = field switch
+                        {
+                            "handle" => all.Where(c => Has(c.Handle)).ToList(),
+                            "name" or "displayname" => all.Where(c => Has(c.DisplayName)).ToList(),
+                            "uid" or "tiktokuid" => all.Where(c => Has(c.TiktokUid)).ToList(),
+                            "diamonds" => all.Where(c => Has(c.Diamonds)).ToList(),
+                            "golivedays" or "go-live-days" => all.Where(c => Has(c.GoLiveDays)).ToList(),
+                            "manager" => all.Where(c => Has(c.Manager)).ToList(),
+                            "promote" => all.Where(c => Has(c.Promote)).ToList(),
+                            "notes" => all.Where(c => Has(c.Notes)).ToList(),
+                            _ => all
+                        };
+                    }
+                    else
+                    {
+                        // Non-* field filter
+                        value ??= "";
+
+                        all = field switch
+                        {
+                            "handle" => all.Where(c => ContainsCI(c.Handle, value)).ToList(),
+                            "name" or "displayname" => all.Where(c => ContainsCI(c.DisplayName, value)).ToList(),
+                            "uid" or "tiktokuid" => all.Where(c => ContainsCI(c.TiktokUid, value)).ToList(),
+                            "diamonds" => all.Where(c => ContainsCI(c.Diamonds, value)).ToList(),
+                            "golivedays" or "go-live-days" => all.Where(c => ContainsCI(c.GoLiveDays, value)).ToList(),
+                            "manager" => all.Where(c => ContainsCI(c.Manager, value)).ToList(),
+                            "promote" => all.Where(c => ContainsCI(c.Promote, value)).ToList(),
+                            "notes" => all.Where(c => ContainsCI(c.Notes, value)).ToList(),
+                            _ => all
+                        };
+                    }
+                }
+                else
+                {
+                    // Free-text mode (contains anywhere)
+                    var q = query;
+
+                    all = all.Where(c =>
+                            ContainsCI(c.Handle, q) ||
+                            ContainsCI(c.DisplayName, q) ||
+                            ContainsCI(c.TiktokUid, q) ||
+                            ContainsCI(c.Diamonds, q) ||
+                            ContainsCI(c.GoLiveDays, q) ||
+                            ContainsCI(c.Manager, q) ||
+                            ContainsCI(c.Promote, q) ||
+                            ContainsCI(c.Notes, q))
+                        .ToList();
+                }
             }
 
             if (all.Count == 0)
@@ -243,6 +299,8 @@ namespace MyDiscordBot.Commands
 
             if (all.Count > 50)
                 text += $"\n…and {all.Count - 50} more.";
+
+            text += "\n\n**Search tips:** `!creator list dan` • `!creator list manager:dan` • `!creator list manager:*`";
 
             await message.Channel.SendMessageAsync(text);
         }
