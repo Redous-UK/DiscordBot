@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net.Http;
 
 namespace MyDiscordBot
 {
@@ -41,12 +42,9 @@ namespace MyDiscordBot
         {
             _http = new HttpClient();
 
-            var baseUrl = Environment.GetEnvironmentVariable("QNA_API_BASE_URL") ?? "https://example.com";
-            var apiKey = Environment.GetEnvironmentVariable("QNA_API_KEY") ?? "";
+            var triviaApi = new OpenTdbService(_http);
 
-            var qnaApi = new QnAApiService(_http, baseUrl, apiKey);
-
-            Services = new BotServices(reminderService, qnaApi);
+            Services = new BotServices(reminderService, triviaApi);
         }
 
         // --- Discord client & config ---
@@ -591,6 +589,7 @@ namespace MyDiscordBot
         public void Dispose()
         {
             Services?.Dispose();
+            _http?.Dispose();
             _birthdayCheckGate?.Dispose();
         }
     }
