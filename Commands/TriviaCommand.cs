@@ -21,6 +21,68 @@ namespace MyDiscordBot.Commands
         // One game per guild
         private static readonly ConcurrentDictionary<ulong, TriviaGame> _games = new();
 
+
+        public static async Task<bool> TryHandleFreeAnswerAsync(SocketMessage message)
+        {
+            // Only guild channels
+            if (message.Author.IsBot) return false;
+            if (message.Channel is not SocketGuildChannel gc) return false;
+
+            var guildId = gc.Guild.Id;
+            if (!_games.TryGetValue(guildId, out var game)) return false;
+
+            // Only when running + question active
+            if (!game.IsRunning || game.Current == null) return false;
+
+            // Only accept a single-letter answer (A/B/C/D)
+            var txt = (message.Content ?? "").Trim();
+            if (txt.Length != 1) return false;
+
+            var letter = char.ToUpperInvariant(txt[0]);
+            int pick = letter switch
+            {
+                'A' => 0,
+                'B' => 1,
+                'C' => 2,
+                'D' => 3,
+                _ => -1
+            };
+
+            if (pick < 0) return false;
+            if (pick >= game.Current.Options.Count) return false; // boolean questions may only have A/B
+
+            // ✅ This message IS an answer; handle it and stop normal command pipeline
+            await game.Gate.WaitAsync();
+            try
+            {
+                // One answer per user per question
+                var userId = message.Author.Id;
+                if (!game.AnsweredUserIds.Add(userId))
+                    return true; // swallow repeats silently (or you can message them)
+
+                var isCorrect = pick == game.Current.CorrectIndex;
+
+                if (isCorrect)
+                {
+                    game.Scores.AddOrUpdate(userId, 1, (_, old) => old + 1);
+                    await message.Channel.SendMessageAsync($"✅ {message.Author.Mention} **Correct!** (+1)");
+                }
+                else
+                {
+                    var correctLetter = new[] { "A", "B", "C", "D" }[game.Current.CorrectIndex];
+                    var correctText = game.Current.Options[game.Current.CorrectIndex];
+                    await message.Channel.SendMessageAsync($"❌ {message.Author.Mention} nope — correct was **{correctLetter}**. {correctText}");
+                }
+
+                return true;
+            }
+            finally
+            {
+                game.Gate.Release();
+            }
+        }
+
+
         public async Task ExecuteAsync(SocketMessage message, string[] args)
         {
             if (message.Channel is not SocketGuildChannel gc)

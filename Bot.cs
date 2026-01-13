@@ -185,6 +185,10 @@ namespace MyDiscordBot
             if (message.Author.IsBot || string.IsNullOrWhiteSpace(message.Content))
                 return;
 
+            // ✅ Intercept free trivia answers like "A", "B", "C", "D"
+            if (await TriviaCommand.TryHandleFreeAnswerAsync(message))
+                return;
+
             if (message is not SocketUserMessage userMessage)
                 return;
 
